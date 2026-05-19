@@ -6,8 +6,9 @@ import { BaladiLogo } from '../../components/BaladiLogo';
 import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
 import { JobCardItem } from '../../components/JobCardItem';
 import { MachineryBackground } from '../../components/MachineryBackground';
-import { PrimaryButton, StatCard } from '../../components/PrimaryButton';
-import { colors, radius, shadow, spacing, typography } from '../../constants/theme';
+import { StatCard } from '../../components/PrimaryButton';
+import { homeConnectionLabel } from '../../constants/connection';
+import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { useNotifications } from '../../context/NotificationsContext';
 import { todayIsoDate } from '../../utils/formatDate';
@@ -35,7 +36,7 @@ export default function HomeScreen() {
       <MachineryBackground opacity={0.14} position="bottom" />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.topBar}>
-          <BaladiLogo variant="compact" size={36} />
+          <BaladiLogo variant="compact" size={layout.logoCompact} />
           <View style={styles.topBarActions}>
             <Pressable
               onPress={() => router.push('/notifications')}
@@ -43,7 +44,7 @@ export default function HomeScreen() {
               hitSlop={8}
               accessibilityLabel="Open notifications"
             >
-              <Ionicons name="notifications-outline" size={20} color={colors.grey600} />
+              <Ionicons name="notifications-outline" size={layout.iconSm} color={colors.grey600} />
               {unread > 0 ? (
                 <View style={styles.bellBadge}>
                   <Text style={styles.bellBadgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
@@ -57,14 +58,14 @@ export default function HomeScreen() {
                 hitSlop={8}
                 accessibilityLabel="Sign out"
               >
-                <Ionicons name="log-out-outline" size={20} color={colors.grey600} />
+                <Ionicons name="log-out-outline" size={layout.iconSm} color={colors.grey600} />
               </Pressable>
             ) : null}
           </View>
         </View>
 
         <View style={styles.greetingBlock}>
-          <Text style={styles.greeting}>
+          <Text style={styles.greeting} numberOfLines={2} allowFontScaling={false}>
             {greeting}, {displayName}
           </Text>
           <Text style={styles.greetingSub}>Here is what is happening today.</Text>
@@ -78,7 +79,7 @@ export default function HomeScreen() {
                   ]}
                 />
                 <Text style={[styles.pillText, { color: usingCache ? colors.warning : colors.success }]}>
-                  {syncing ? 'Syncing…' : usingCache ? 'Cached · offline' : 'Appwrite'}
+                  {homeConnectionLabel({ syncing, usingCache })}
                 </Text>
               </View>
             ) : (
@@ -88,25 +89,6 @@ export default function HomeScreen() {
               </View>
             )}
             <Text style={styles.todayText}>{formatToday()}</Text>
-          </View>
-        </View>
-
-        <View style={styles.hero}>
-          <View style={styles.heroAccent} />
-          <View style={styles.heroBody}>
-            <Text style={styles.heroLabel}>New job card</Text>
-            <Text style={styles.heroTitle}>Start a mission report</Text>
-            <Text style={styles.heroText}>
-              Record client visits, equipment serviced, parts used and outcomes — straight from the
-              site.
-            </Text>
-            <View style={styles.heroAction}>
-              <PrimaryButton
-                label="Create job card"
-                icon="add"
-                onPress={() => router.push('/job/new')}
-              />
-            </View>
           </View>
         </View>
 
@@ -156,7 +138,7 @@ export default function HomeScreen() {
                 </View>
                 <Text style={styles.emptyTitle}>No job cards yet</Text>
                 <Text style={styles.emptyText}>
-                  Tap “Create job card” above to record your first mission.
+                  Create a new mission from the Job Cards tab.
                 </Text>
               </View>
             ) : (
@@ -207,9 +189,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: layout.iconButtonSize,
+    height: layout.iconButtonSize,
+    borderRadius: layout.iconButtonSize / 2,
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
@@ -239,7 +221,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   greeting: {
-    ...typography.title,
+    ...typography.screenTitle,
     color: colors.black,
   },
   greetingSub: {
@@ -281,39 +263,6 @@ const styles = StyleSheet.create({
   todayText: {
     ...typography.caption,
     color: colors.grey400,
-  },
-  hero: {
-    flexDirection: 'row',
-    backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.grey200,
-    overflow: 'hidden',
-    ...shadow.card,
-  },
-  heroAccent: {
-    width: 5,
-    backgroundColor: colors.primary,
-  },
-  heroBody: {
-    flex: 1,
-    padding: spacing.lg,
-    gap: spacing.sm,
-  },
-  heroLabel: {
-    ...typography.label,
-    color: colors.primaryDark,
-  },
-  heroTitle: {
-    ...typography.heading,
-    color: colors.black,
-  },
-  heroText: {
-    ...typography.body,
-    color: colors.grey600,
-  },
-  heroAction: {
-    marginTop: spacing.sm,
   },
   loader: {
     marginTop: spacing.xl,

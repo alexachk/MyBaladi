@@ -214,7 +214,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   welcome: { ...typography.title, color: colors.black, textAlign: 'center' },
-  subtitle: { ...typography.body, color: colors.grey600, textAlign: 'center' },
+  subtitle: { ...typography.body, color: colors.grey600 },
   form: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,

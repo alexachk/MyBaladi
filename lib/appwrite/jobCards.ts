@@ -1,6 +1,8 @@
 import { ID, Permission, Query, Role } from 'react-native-appwrite';
 import { appwriteConfig, isAppwriteConfigured, isAppwriteDatabaseConfigured } from './config';
 import { getAccount, getDatabases } from './client';
+import { listPersonnel } from './adminUsers';
+import { getManagerReadersForJob } from '../orgHierarchy';
 import { JobCard, JobPriority, JobStatus } from '../../types/jobCard';
 import type { ClientType } from '../../types/client';
 
@@ -86,6 +88,7 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     parentJobId: nullableStr(doc.parentJobId),
     assigneeId: nullableStr(doc.assigneeId),
     assigneeName: nullableStr(doc.assigneeName),
+    technicianId: nullableStr(doc.technicianId),
     scheduledTime: nullableStr(doc.scheduledTime),
     reminderAt: nullableDate(doc.reminderAt),
     startedAt: nullableDate(doc.startedAt),
@@ -133,8 +136,8 @@ function normalizeForWrite(
   return out;
 }
 
-function userPermissions(userId: string) {
-  return [
+function userPermissions(userId: string, extraReaderIds: string[] = []) {
+  const perms = [
     Permission.read(Role.user(userId)),
     Permission.update(Role.user(userId)),
     Permission.delete(Role.user(userId)),
@@ -142,16 +145,41 @@ function userPermissions(userId: string) {
     Permission.update(Role.label('admin')),
     Permission.delete(Role.label('admin')),
   ];
+  for (const readerId of extraReaderIds) {
+    if (!readerId || readerId === userId) continue;
+    perms.push(Permission.read(Role.user(readerId)));
+  }
+  return perms;
 }
 
 export async function fetchJobCardsFromAppwrite(
   userId: string,
-  options: { all?: boolean } = {},
+  options: { all?: boolean; visibleUserIds?: string[] | null } = {},
 ): Promise<JobCard[]> {
   if (!isAppwriteDatabaseConfigured()) return [];
 
-  const queries = [Query.orderDesc('$updatedAt'), Query.limit(200)];
-  if (!options.all) queries.unshift(Query.equal('technicianId', userId));
+  const queries = [Query.orderDesc('$updatedAt'), Query.limit(500)];
+
+  if (!options.all) {
+    const ids = options.visibleUserIds?.length
+      ? [...new Set(options.visibleUserIds)]
+      : [userId];
+
+    if (ids.length === 1) {
+      queries.unshift(
+        Query.or([Query.equal('technicianId', ids[0]), Query.equal('assigneeId', ids[0])]),
+      );
+    } else {
+      queries.unshift(
+        Query.or(
+          ids.flatMap((id) => [
+            Query.equal('technicianId', id),
+            Query.equal('assigneeId', id),
+          ]),
+        ),
+      );
+    }
+  }
 
   const response = await getDatabases().listDocuments({
     databaseId: appwriteConfig.databaseId,
@@ -166,12 +194,28 @@ export async function createJobCardInAppwrite(
   job: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt'>,
   userId: string,
 ): Promise<JobCard> {
+  let managerReaders: string[] = [];
+  try {
+    const personnel = await listPersonnel();
+    const members = personnel.map((p) => ({
+      id: p.id,
+      name: p.name,
+      email: p.email,
+      labels: p.labels,
+      position: p.position,
+      managerId: p.managerId ?? '',
+    }));
+    managerReaders = getManagerReadersForJob(userId, job.assigneeId, members);
+  } catch {
+    // best-effort — owner + admin permissions still apply
+  }
+
   const doc = await getDatabases().createDocument({
     databaseId: appwriteConfig.databaseId,
     collectionId: appwriteConfig.jobCardsCollectionId,
     documentId: ID.unique(),
     data: normalizeForWrite(job, userId),
-    permissions: userPermissions(userId),
+    permissions: userPermissions(userId, managerReaders),
   });
 
   return documentToJobCard(doc as unknown as JobCardDocBase);

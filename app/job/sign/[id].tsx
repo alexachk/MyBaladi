@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import SignatureCanvas, { type SignatureViewRef } from 'react-native-signature-canvas';
 import { FormField } from '../../../components/FormField';
 import { PrimaryButton } from '../../../components/PrimaryButton';
-import { colors, radius, spacing, typography } from '../../../constants/theme';
+import { colors, layout, radius, spacing, typography } from '../../../constants/theme';
 import { useAuth, useJobCards } from '../../../context/JobCardsContext';
 import { uploadAttachment } from '../../../lib/appwrite/storage';
 
@@ -113,15 +113,29 @@ export default function SignJobCardScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>Sign-off · {job.reference}</Text>
-            <Text style={styles.headerSub}>{job.clientName}</Text>
+          <View style={styles.topBar}>
+            <Pressable
+              onPress={() => router.back()}
+              accessibilityLabel="Close sign-off"
+              hitSlop={8}
+              style={({ pressed }) => [styles.closeBtn, pressed && { opacity: 0.7 }]}
+            >
+              <Ionicons name="close" size={layout.iconMd} color={colors.black} />
+            </Pressable>
+            <View style={styles.headerText}>
+              <Text style={styles.headerTitle} numberOfLines={1} allowFontScaling={false}>
+                Sign-off · {job.reference}
+              </Text>
+              <Text style={styles.headerSub} numberOfLines={1}>
+                {job.clientName}
+              </Text>
+            </View>
           </View>
 
           <View style={styles.steps}>
@@ -244,8 +258,24 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md, padding: spacing.lg },
   emptyTitle: { ...typography.subheading, color: colors.black },
-  header: { marginBottom: spacing.sm },
-  headerTitle: { ...typography.title, color: colors.black },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  closeBtn: {
+    width: layout.iconButtonSize,
+    height: layout.iconButtonSize,
+    borderRadius: layout.iconButtonSize / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  headerText: { flex: 1, minWidth: 0 },
+  headerTitle: { ...typography.screenTitle, color: colors.black },
   headerSub: { ...typography.caption, color: colors.grey600, marginTop: 4 },
   steps: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
   stepBadge: {

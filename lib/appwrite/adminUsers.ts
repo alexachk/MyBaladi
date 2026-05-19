@@ -8,6 +8,9 @@ export type AdminUser = {
   firstName: string;
   lastName: string;
   position: string;
+  managerId: string;
+  contactPhones: string[];
+  contactEmails: string[];
   labels: string[];
   status: boolean | string;
 };
@@ -63,6 +66,9 @@ export async function createAdminUser(input: {
   firstName?: string;
   lastName?: string;
   position?: string;
+  managerId?: string;
+  contactPhones?: string[];
+  contactEmails?: string[];
   grantAdmin?: boolean;
 }): Promise<AdminUser> {
   const result = await executeAdmin<{ user: AdminUser }>({
@@ -72,6 +78,9 @@ export async function createAdminUser(input: {
     firstName: input.firstName?.trim() ?? '',
     lastName: input.lastName?.trim() ?? '',
     position: input.position?.trim() ?? '',
+    managerId: input.managerId?.trim() ?? '',
+    contactPhones: input.contactPhones ?? [],
+    contactEmails: input.contactEmails ?? [],
     grantAdmin: Boolean(input.grantAdmin),
   });
   return result.user;
@@ -82,6 +91,11 @@ export async function updateAdminUserProfile(input: {
   firstName: string;
   lastName: string;
   position: string;
+  managerId?: string;
+  email?: string;
+  password?: string;
+  contactPhones?: string[];
+  contactEmails?: string[];
 }): Promise<AdminUser> {
   const result = await executeAdmin<{ user: AdminUser }>({
     action: 'update-profile',
@@ -89,6 +103,11 @@ export async function updateAdminUserProfile(input: {
     firstName: input.firstName.trim(),
     lastName: input.lastName.trim(),
     position: input.position.trim(),
+    managerId: input.managerId?.trim() ?? '',
+    email: input.email?.trim().toLowerCase() ?? '',
+    password: input.password ?? '',
+    contactPhones: input.contactPhones ?? [],
+    contactEmails: input.contactEmails ?? [],
   });
   return result.user;
 }
@@ -96,6 +115,15 @@ export async function updateAdminUserProfile(input: {
 export async function setAdminUserRole(userId: string, enabled: boolean): Promise<AdminUser> {
   const result = await executeAdmin<{ user: AdminUser }>({
     action: 'set-admin',
+    userId,
+    enabled,
+  });
+  return result.user;
+}
+
+export async function setAppDevUserRole(userId: string, enabled: boolean): Promise<AdminUser> {
+  const result = await executeAdmin<{ user: AdminUser }>({
+    action: 'set-app-dev',
     userId,
     enabled,
   });
@@ -112,6 +140,9 @@ export type Personnel = {
   email: string;
   labels: string[];
   position: string;
+  managerId: string;
+  contactPhones: string[];
+  contactEmails: string[];
 };
 
 export async function listPersonnel(): Promise<Personnel[]> {

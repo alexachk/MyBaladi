@@ -31,6 +31,7 @@ export interface JobCard {
   parentJobId?: string | null;
   assigneeId?: string | null;
   assigneeName?: string | null;
+  technicianId?: string | null;
 
   scheduledTime?: string | null;
   reminderAt?: string | null;

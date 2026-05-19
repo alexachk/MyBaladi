@@ -1,17 +1,9 @@
 import { Stack } from 'expo-router';
-import { colors } from '../../constants/theme';
+import { stackScreenOptions } from '../../constants/navigation';
 
 export default function ClientsLayout() {
   return (
-    <Stack
-      screenOptions={{
-        headerStyle: { backgroundColor: colors.white },
-        headerTintColor: colors.black,
-        headerTitleStyle: { fontWeight: '600' },
-        headerShadowVisible: false,
-        contentStyle: { backgroundColor: colors.background },
-      }}
-    >
+    <Stack screenOptions={stackScreenOptions}>
       <Stack.Screen name="index" options={{ title: 'Clients' }} />
       <Stack.Screen name="new-person" options={{ title: 'New person', presentation: 'modal' }} />
       <Stack.Screen name="new-company" options={{ title: 'New company', presentation: 'modal' }} />

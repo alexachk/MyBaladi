@@ -14,7 +14,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radius, spacing, typography } from '../constants/theme';
+import { colors, layout, radius, spacing, typography } from '../constants/theme';
 import { useClients } from '../context/ClientsContext';
 import type { Company, Person } from '../types/client';
 
@@ -79,15 +79,17 @@ export function ClientsSidebar({ visible, onClose, onPick, pickerMode }: Clients
           <View style={[styles.safe, { paddingTop: topPad, paddingBottom: bottomPad }]}>
             <View style={styles.header}>
               <View style={styles.headerTitleRow}>
-                <Ionicons name="people-circle-outline" size={22} color={colors.black} />
-                <Text style={styles.headerTitle}>Clients</Text>
+                <Ionicons name="people-circle-outline" size={layout.iconMd} color={colors.black} />
+                <Text style={styles.headerTitle} numberOfLines={1} allowFontScaling={false}>
+                  Clients
+                </Text>
               </View>
               <Pressable
                 onPress={onClose}
                 hitSlop={12}
                 style={({ pressed }) => [styles.closeBtn, pressed && styles.pressed]}
               >
-                <Ionicons name="close" size={22} color={colors.grey600} />
+                <Ionicons name="close" size={layout.iconMd} color={colors.grey600} />
               </Pressable>
             </View>
 
@@ -237,7 +239,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  headerTitle: { ...typography.title, color: colors.black },
+  headerTitle: { ...typography.screenTitle, color: colors.black },
   closeBtn: { padding: 4 },
   tabsRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, gap: spacing.sm, marginBottom: spacing.sm },
   tabBtn: {

@@ -1,6 +1,11 @@
 import { Client, ID, Query, Users } from 'node-appwrite';
 
 const ADMIN_LABEL = 'admin';
+const APP_DEV_LABEL = 'appdev';
+
+function hasManagementAccess(labels) {
+  return (labels ?? []).includes(APP_DEV_LABEL);
+}
 
 function adminClient(req) {
   return new Client()
@@ -17,8 +22,8 @@ async function requireAdmin(req, res) {
 
   const users = new Users(adminClient(req));
   const caller = await users.get(userId);
-  if (!(caller.labels ?? []).includes(ADMIN_LABEL)) {
-    return { error: res.json({ ok: false, error: 'Administrator access required.' }, 403) };
+  if (!hasManagementAccess(caller.labels)) {
+    return { error: res.json({ ok: false, error: 'App Dev access required.' }, 403) };
   }
 
   return { users, caller };
@@ -32,16 +37,50 @@ function parseBody(req) {
   }
 }
 
+function normalizeList(values, { lowercase = false } = {}) {
+  const seen = new Set();
+  const out = [];
+  const source = Array.isArray(values) ? values : [];
+  for (const raw of source) {
+    const v = lowercase ? String(raw ?? '').trim().toLowerCase() : String(raw ?? '').trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function readStoredList(prefs, key, { lowercase = false } = {}) {
+  const raw = prefs?.[key];
+  if (raw == null || raw === '') return [];
+  if (Array.isArray(raw)) return normalizeList(raw, { lowercase });
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return normalizeList(parsed, { lowercase });
+    } catch {
+      return normalizeList([raw], { lowercase });
+    }
+  }
+  return [];
+}
+
 function publicUser(user) {
   const prefs = user.prefs ?? {};
+  const labels = user.labels ?? [];
+  const storedPosition = prefs.position ?? '';
+  const position = labels.includes(APP_DEV_LABEL) ? 'App Dev' : storedPosition;
   return {
     id: user.$id,
     email: user.email,
     name: user.name ?? '',
     firstName: prefs.firstName ?? '',
     lastName: prefs.lastName ?? '',
-    position: prefs.position ?? '',
-    labels: user.labels ?? [],
+    position,
+    managerId: prefs.managerId ?? '',
+    contactPhones: readStoredList(prefs, 'contactPhones'),
+    contactEmails: readStoredList(prefs, 'contactEmails', { lowercase: true }),
+    labels,
     status: user.status,
   };
 }
@@ -61,13 +100,20 @@ export default async ({ req, res, log, error }) => {
       const list = await users.list([Query.orderAsc('name'), Query.limit(200)]);
       return res.json({
         ok: true,
-        personnel: list.users.map((u) => ({
-          id: u.$id,
-          name: u.name ?? '',
-          email: u.email,
-          labels: u.labels ?? [],
-          position: u.prefs?.position ?? '',
-        })),
+        personnel: list.users.map((u) => {
+          const labels = u.labels ?? [];
+          const storedPosition = u.prefs?.position ?? '';
+          return {
+            id: u.$id,
+            name: u.name ?? '',
+            email: u.email,
+            labels,
+            position: labels.includes(APP_DEV_LABEL) ? 'App Dev' : storedPosition,
+            managerId: u.prefs?.managerId ?? '',
+            contactPhones: readStoredList(u.prefs, 'contactPhones'),
+            contactEmails: readStoredList(u.prefs, 'contactEmails', { lowercase: true }),
+          };
+        }),
       });
     }
 
@@ -87,6 +133,9 @@ export default async ({ req, res, log, error }) => {
         const firstName = String(body.firstName ?? '').trim();
         const lastName = String(body.lastName ?? '').trim();
         const position = String(body.position ?? '').trim();
+        const managerId = String(body.managerId ?? '').trim();
+        const contactPhones = normalizeList(body.contactPhones ?? []);
+        const contactEmails = normalizeList(body.contactEmails ?? [], { lowercase: true });
         const name = `${firstName} ${lastName}`.trim() || String(body.name ?? '').trim();
         const grantAdmin = Boolean(body.grantAdmin);
 
@@ -96,6 +145,11 @@ export default async ({ req, res, log, error }) => {
         if (password.length < 8) {
           return res.json({ ok: false, error: 'Password must be at least 8 characters.' }, 400);
         }
+        for (const mail of contactEmails) {
+          if (!mail.includes('@')) {
+            return res.json({ ok: false, error: 'Each contact email must be valid.' }, 400);
+          }
+        }
 
         const created = await users.create({
           userId: ID.unique(),
@@ -104,11 +158,14 @@ export default async ({ req, res, log, error }) => {
           name: name || undefined,
         });
 
-        if (firstName || lastName || position) {
+        if (firstName || lastName || position || managerId || contactPhones.length || contactEmails.length) {
           const updated = await users.updatePrefs(created.$id, {
             firstName,
             lastName,
             position,
+            managerId,
+            contactPhones: JSON.stringify(contactPhones),
+            contactEmails: JSON.stringify(contactEmails),
           });
           created.prefs = updated.prefs;
         }
@@ -116,6 +173,12 @@ export default async ({ req, res, log, error }) => {
         if (grantAdmin) {
           await users.updateLabels(created.$id, [ADMIN_LABEL]);
           created.labels = [ADMIN_LABEL];
+        }
+
+        if (position === 'App Dev') {
+          const labels = Array.from(new Set([...(created.labels ?? []), APP_DEV_LABEL]));
+          await users.updateLabels(created.$id, labels);
+          created.labels = labels;
         }
 
         return res.json({ ok: true, user: publicUser(created) });
@@ -128,14 +191,57 @@ export default async ({ req, res, log, error }) => {
         const firstName = String(body.firstName ?? '').trim();
         const lastName = String(body.lastName ?? '').trim();
         const position = String(body.position ?? '').trim();
+        const managerId = String(body.managerId ?? '').trim();
+        const email = String(body.email ?? '').trim().toLowerCase();
+        const password = String(body.password ?? '');
+        const contactPhones = normalizeList(body.contactPhones ?? []);
+        const contactEmails = normalizeList(body.contactEmails ?? [], { lowercase: true });
         const fullName = `${firstName} ${lastName}`.trim();
 
-        if (fullName) await users.updateName(userId, fullName);
         const target = await users.get(userId);
-        const nextPrefs = { ...(target.prefs ?? {}), firstName, lastName, position };
-        const updated = await users.updatePrefs(userId, nextPrefs);
+        const callerId = req.headers['x-appwrite-user-id'];
+        const wasAppDev = (target.labels ?? []).includes(APP_DEV_LABEL);
+        if (callerId === userId && wasAppDev && position !== 'App Dev') {
+          return res.json({ ok: false, error: 'You cannot change your own App Dev role.' }, 400);
+        }
+
+        if (email && !email.includes('@')) {
+          return res.json({ ok: false, error: 'Valid email is required.' }, 400);
+        }
+        if (password && password.length < 8) {
+          return res.json({ ok: false, error: 'Password must be at least 8 characters.' }, 400);
+        }
+
+        for (const mail of contactEmails) {
+          if (!mail.includes('@')) {
+            return res.json({ ok: false, error: 'Each contact email must be valid.' }, 400);
+          }
+        }
+
+        if (fullName) await users.updateName(userId, fullName);
+        if (email && email !== target.email) {
+          await users.updateEmail(userId, email);
+        }
+        if (password) {
+          await users.updatePassword(userId, password);
+        }
+        const nextPrefs = {
+          ...(target.prefs ?? {}),
+          firstName,
+          lastName,
+          position,
+          managerId,
+          contactPhones: JSON.stringify(contactPhones),
+          contactEmails: JSON.stringify(contactEmails),
+        };
+        await users.updatePrefs(userId, nextPrefs);
+
+        const labels = new Set(target.labels ?? []);
+        if (position === 'App Dev') labels.add(APP_DEV_LABEL);
+        else labels.delete(APP_DEV_LABEL);
+        await users.updateLabels(userId, Array.from(labels));
+
         const result = await users.get(userId);
-        result.prefs = updated.prefs;
         return res.json({ ok: true, user: publicUser(result) });
       }
       case 'set-admin': {
@@ -152,6 +258,26 @@ export default async ({ req, res, log, error }) => {
 
         const updated = await users.updateLabels(userId, Array.from(labels));
         return res.json({ ok: true, user: publicUser(updated) });
+      }
+      case 'set-app-dev': {
+        const userId = String(body.userId ?? '');
+        const enabled = Boolean(body.enabled);
+        if (!userId) {
+          return res.json({ ok: false, error: 'User id is required.' }, 400);
+        }
+
+        const target = await users.get(userId);
+        const labels = new Set(target.labels ?? []);
+        if (enabled) labels.add(APP_DEV_LABEL);
+        else labels.delete(APP_DEV_LABEL);
+
+        const updated = await users.updateLabels(userId, Array.from(labels));
+        if (enabled) {
+          const prefs = { ...(updated.prefs ?? {}), position: 'App Dev' };
+          await users.updatePrefs(userId, prefs);
+        }
+        const result = await users.get(userId);
+        return res.json({ ok: true, user: publicUser(result) });
       }
       case 'delete': {
         const userId = String(body.userId ?? '');

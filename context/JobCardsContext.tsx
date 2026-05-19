@@ -15,11 +15,18 @@ import {
   fetchJobCardsFromAppwrite,
   updateJobCardInAppwrite,
 } from '../lib/appwrite/jobCards';
+import { listPersonnel } from '../lib/appwrite/adminUsers';
 import { isAppwriteConfigured, isAppwriteDatabaseConfigured } from '../lib/appwrite/config';
 import { getCurrentSessionUser, isAdminUser, loginWithEmail, logout as logoutSession } from '../lib/appwrite/auth';
+import {
+  getDescendantIds,
+  getDirectReports,
+  getVisibleUserIds,
+} from '../lib/orgHierarchy';
 import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated } from '../lib/notifyEvents';
 import { clearCredentials } from '../lib/biometric';
 import { JobCard } from '../types/jobCard';
+import type { OrgMember } from '../types/org';
 
 /** Read-only snapshot after a successful Appwrite fetch (offline fallback only). */
 const CACHE_KEY = '@mybaladi/job-cards-cache';
@@ -39,15 +46,18 @@ interface JobCardsContextValue {
   jobCards: JobCard[];
   loading: boolean;
   syncing: boolean;
-  /** True when job cards are loaded from Appwrite (signed in + DB configured). */
   isRemote: boolean;
-  /** True when showing last cached fetch because Appwrite was unreachable. */
   usingCache: boolean;
   refresh: () => Promise<void>;
+  refreshTeam: () => Promise<void>;
   addJobCard: (job: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt'>) => Promise<JobCard>;
   updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>;
   deleteJobCard: (id: string) => Promise<void>;
   getJobCard: (id: string) => JobCard | undefined;
+  /** Org chart for calendar team view */
+  teamMembers: OrgMember[];
+  directReports: OrgMember[];
+  canViewTeam: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -132,9 +142,47 @@ export function useAuth() {
 export function JobCardsProvider({ children }: { children: ReactNode }) {
   const { user, isConfigured, isAdmin } = useAuth();
   const [jobCards, setJobCards] = useState<JobCard[]>([]);
+  const [teamMembers, setTeamMembers] = useState<OrgMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [usingCache, setUsingCache] = useState(false);
+
+  const directReports = useMemo(
+    () => (user ? getDirectReports(user.$id, teamMembers) : []),
+    [user, teamMembers],
+  );
+
+  const visibleUserIds = useMemo(
+    () => (user ? getVisibleUserIds(user.$id, isAdmin, teamMembers) : []),
+    [user, isAdmin, teamMembers],
+  );
+
+  const canViewTeam =
+    isAdmin || (user ? getDescendantIds(user.$id, teamMembers).length > 0 : false);
+
+  const loadTeam = useCallback(async () => {
+    if (!isConfigured || !user) {
+      setTeamMembers([]);
+      return;
+    }
+    try {
+      const personnel = await listPersonnel();
+      setTeamMembers(
+        personnel.map((p) => ({
+          id: p.id,
+          name: p.name,
+          email: p.email,
+          labels: p.labels,
+          position: p.position,
+          managerId: p.managerId ?? '',
+          contactPhones: p.contactPhones ?? [],
+          contactEmails: p.contactEmails ?? [],
+        })),
+      );
+    } catch {
+      setTeamMembers([]);
+    }
+  }, [isConfigured, user]);
 
   const isRemote = isConfigured && isAppwriteDatabaseConfigured() && Boolean(user);
 
@@ -155,7 +203,10 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     const sessionUser = requireSession();
     setSyncing(true);
     try {
-      const cards = await fetchJobCardsFromAppwrite(sessionUser.$id, { all: isAdmin });
+      const cards = await fetchJobCardsFromAppwrite(sessionUser.$id, {
+        all: isAdmin,
+        visibleUserIds,
+      });
       setJobCards(cards);
       setUsingCache(false);
       await writeCache(cards);
@@ -172,7 +223,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     } finally {
       setSyncing(false);
     }
-  }, [requireSession, isAdmin]);
+  }, [requireSession, isAdmin, visibleUserIds]);
 
   const refresh = useCallback(async () => {
     if (!isRemote) {
@@ -186,6 +237,10 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     AsyncStorage.removeItem(LEGACY_LOCAL_KEY).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    loadTeam().catch(() => undefined);
+  }, [loadTeam]);
 
   useEffect(() => {
     setLoading(true);
@@ -311,10 +366,14 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       isRemote,
       usingCache,
       refresh,
+      refreshTeam: loadTeam,
       addJobCard,
       updateJobCard,
       deleteJobCard,
       getJobCard,
+      teamMembers,
+      directReports,
+      canViewTeam,
     }),
     [
       jobCards,
@@ -323,10 +382,14 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       isRemote,
       usingCache,
       refresh,
+      loadTeam,
       addJobCard,
       updateJobCard,
       deleteJobCard,
       getJobCard,
+      teamMembers,
+      directReports,
+      canViewTeam,
     ],
   );
 

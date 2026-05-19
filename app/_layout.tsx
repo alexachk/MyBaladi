@@ -1,8 +1,10 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, LogBox, StyleSheet, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
+import { stackScreenOptions } from '../constants/navigation';
 import { SplashGate } from '../components/SplashGate';
 import { ClientsProvider } from '../context/ClientsContext';
 import { AuthProvider, JobCardsProvider, useAuth } from '../context/JobCardsContext';
@@ -10,6 +12,11 @@ import { NotificationsProvider } from '../context/NotificationsContext';
 import { hydrateLocalStoragePolyfill } from '../lib/localStoragePolyfill';
 import { configureNotifications } from '../lib/notifications';
 import { verifyAppwriteSetup } from '../lib/appwrite/ping';
+
+LogBox.ignoreLogs([
+  'expo-notifications: Android Push notifications',
+  '`expo-notifications` functionality is not fully supported in Expo Go',
+]);
 
 void hydrateLocalStoragePolyfill();
 verifyAppwriteSetup();
@@ -46,15 +53,7 @@ function RootNavigator() {
   return (
     <>
       <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: colors.white },
-          headerTintColor: colors.black,
-          headerTitleStyle: { fontWeight: '600' },
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: colors.background },
-        }}
-      >
+      <Stack screenOptions={stackScreenOptions}>
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen
           name="(tabs)"
@@ -65,7 +64,7 @@ function RootNavigator() {
           options={{ title: 'New Job Card', presentation: 'modal' }}
         />
         <Stack.Screen name="job/[id]" options={{ title: 'Job Card' }} />
-        <Stack.Screen name="job/sign/[id]" options={{ title: 'Sign off', presentation: 'modal' }} />
+        <Stack.Screen name="job/sign/[id]" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen name="clients" options={{ headerShown: false }} />
         <Stack.Screen
@@ -82,17 +81,19 @@ function RootNavigator() {
 
 export default function RootLayout() {
   return (
-    <SplashGate durationMs={2500}>
-      <AuthProvider>
-        <ClientsProvider>
-          <JobCardsProvider>
-            <NotificationsProvider>
-              <RootNavigator />
-            </NotificationsProvider>
-          </JobCardsProvider>
-        </ClientsProvider>
-      </AuthProvider>
-    </SplashGate>
+    <SafeAreaProvider>
+      <SplashGate durationMs={2500}>
+        <AuthProvider>
+          <ClientsProvider>
+            <JobCardsProvider>
+              <NotificationsProvider>
+                <RootNavigator />
+              </NotificationsProvider>
+            </JobCardsProvider>
+          </ClientsProvider>
+        </AuthProvider>
+      </SplashGate>
+    </SafeAreaProvider>
   );
 }
 

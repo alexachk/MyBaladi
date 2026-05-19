@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, radius, spacing, typography } from '../../constants/theme';
+import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useClients } from '../../context/ClientsContext';
 
 type Tab = 'persons' | 'companies';
@@ -117,7 +117,7 @@ export default function ClientsIndex() {
         style={({ pressed }) => [styles.fab, pressed && styles.pressed]}
         onPress={() => router.push(tab === 'persons' ? '/clients/new-person' : '/clients/new-company')}
       >
-        <Ionicons name="add" size={26} color={colors.black} />
+        <Ionicons name="add" size={layout.iconMd} color={colors.black} />
       </Pressable>
     </SafeAreaView>
   );
@@ -212,9 +212,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: spacing.lg,
     bottom: spacing.xl,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: layout.fabSize,
+    height: layout.fabSize,
+    borderRadius: layout.fabSize / 2,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',

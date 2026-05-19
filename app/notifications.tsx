@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   emptyTitle: { ...typography.subheading, color: colors.black },
-  emptyText: { ...typography.body, color: colors.grey600, textAlign: 'center' },
+  emptyText: { ...typography.body, color: colors.grey600 },
   row: {
     flexDirection: 'row',
     gap: spacing.md,

@@ -1,10 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Platform } from 'react-native';
 import { Tabs } from 'expo-router';
-import { colors } from '../../constants/theme';
-import { useAuth } from '../../context/JobCardsContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, layout } from '../../constants/theme';
 
 export default function TabsLayout() {
-  const { isAdmin } = useAuth();
+  const insets = useSafeAreaInsets();
+
+  const tabBarBottom = Math.max(insets.bottom, layout.tabBarPaddingBottom);
+  const tabBarHeight = layout.tabBarPaddingTop + layout.tabBarInnerHeight + tabBarBottom;
 
   return (
     <Tabs
@@ -15,12 +19,12 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colors.white,
           borderTopColor: colors.grey200,
-          height: 84,
-          paddingTop: 8,
-          paddingBottom: 28,
+          height: tabBarHeight,
+          paddingTop: layout.tabBarPaddingTop,
+          paddingBottom: tabBarBottom,
         },
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: Platform.OS === 'android' ? 11 : 12,
           fontWeight: '600',
         },
       }}
@@ -29,8 +33,8 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="home-outline" size={layout.tabIconSize} color={color} />
           ),
         }}
       />
@@ -38,18 +42,26 @@ export default function TabsLayout() {
         name="jobs"
         options={{
           title: 'Job Cards',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="clipboard-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="clipboard-outline" size={layout.tabIconSize} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="admin"
+        name="calendar"
         options={{
-          href: isAdmin ? undefined : null,
-          title: 'Admin',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="shield-checkmark-outline" size={size} color={color} />
+          title: 'Schedule',
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="calendar-outline" size={layout.tabIconSize} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="team"
+        options={{
+          title: 'Team',
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="people-outline" size={layout.tabIconSize} color={color} />
           ),
         }}
       />
@@ -57,8 +69,8 @@ export default function TabsLayout() {
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="settings-outline" size={layout.tabIconSize} color={color} />
           ),
         }}
       />

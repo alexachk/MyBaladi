@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     marginBottom: spacing.md,
   },
-  selectorText: { ...typography.body, color: colors.black, fontSize: 15 },
+  selectorText: { ...typography.body, color: colors.black, fontSize: 15, textAlign: 'left' },
   selectorHint: { ...typography.caption, color: colors.grey600, fontSize: 12, marginTop: 2 },
   placeholder: { color: colors.grey400 },
   pressed: { opacity: 0.85 },

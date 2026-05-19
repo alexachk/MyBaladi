@@ -1,5 +1,39 @@
 /** Single source of truth for Appwrite schema — synced via `npm run appwrite:sync`. */
 
+/** Grant the same DB/storage rights as label:admin to label:appdev. */
+function withAppDev(permissions) {
+  const out = [...permissions];
+  for (const rule of permissions) {
+    if (rule.includes('label:admin')) {
+      out.push(rule.replace('label:admin', 'label:appdev'));
+    }
+  }
+  return out;
+}
+
+/**
+ * Platforms registered with the Appwrite project (controls the allowed Origin
+ * for SDK requests). Without these, the React Native SDK calls fail with
+ * "Invalid Origin".
+ *
+ * Types accepted by the Appwrite API: 'web' | 'flutter-android' |
+ * 'flutter-ios' | 'flutter-linux' | 'flutter-macos' | 'flutter-windows' |
+ * 'apple-ios' | 'apple-macos' | 'apple-watchos' | 'apple-tvos' | 'android' |
+ * 'unity' | 'react-native-android' | 'react-native-ios'
+ */
+export const PLATFORMS = [
+  {
+    type: 'react-native-android',
+    name: 'MyBaladi Android',
+    key: 'com.baladi.mybaladi',
+  },
+  {
+    type: 'react-native-ios',
+    name: 'MyBaladi iOS',
+    key: 'com.baladi.mybaladi',
+  },
+];
+
 export const ADMIN_USERS_FUNCTION = {
   id: 'admin_users',
   name: 'Admin Users',
@@ -26,7 +60,7 @@ export const COLLECTIONS = [
     id: 'job_cards',
     name: 'Job Cards',
     documentSecurity: true,
-    collectionPermissions: ['create("users")', 'read("label:admin")', 'update("label:admin")', 'delete("label:admin")'],
+    collectionPermissions: withAppDev(['create("users")', 'read("label:admin")', 'update("label:admin")', 'delete("label:admin")']),
     attributes: [
       { type: 'string', key: 'reference', size: 64, required: true },
       { type: 'string', key: 'clientName', size: 256, required: true },
@@ -68,6 +102,7 @@ export const COLLECTIONS = [
     indexes: [
       { key: 'technicianId_idx', type: 'key', attributes: ['technicianId'] },
       { key: 'status_idx', type: 'key', attributes: ['status'] },
+      { key: 'assigneeId_idx', type: 'key', attributes: ['assigneeId'] },
       { key: 'scheduledDate_idx', type: 'key', attributes: ['scheduledDate'] },
       { key: 'reference_idx', type: 'key', attributes: ['reference'] },
       { key: 'personId_idx', type: 'key', attributes: ['personId'] },
@@ -79,7 +114,7 @@ export const COLLECTIONS = [
     id: 'persons',
     name: 'Persons',
     documentSecurity: false,
-    collectionPermissions: ['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")'],
+    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")']),
     attributes: [
       { type: 'string', key: 'firstName', size: 128, required: true },
       { type: 'string', key: 'lastName', size: 128 },
@@ -102,7 +137,7 @@ export const COLLECTIONS = [
     id: 'companies',
     name: 'Companies',
     documentSecurity: false,
-    collectionPermissions: ['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")'],
+    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")']),
     attributes: [
       { type: 'string', key: 'name', size: 256, required: true },
       { type: 'string', key: 'legalName', size: 256 },
@@ -125,7 +160,7 @@ export const COLLECTIONS = [
     id: 'job_comments',
     name: 'Job Comments',
     documentSecurity: false,
-    collectionPermissions: ['read("users")', 'create("users")', 'update("label:admin")', 'delete("label:admin")'],
+    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("label:admin")', 'delete("label:admin")']),
     attributes: [
       { type: 'string', key: 'jobId', size: 36, required: true },
       { type: 'string', key: 'authorId', size: 36, required: true },
@@ -140,7 +175,7 @@ export const COLLECTIONS = [
     id: 'notifications',
     name: 'Notifications',
     documentSecurity: true,
-    collectionPermissions: ['create("users")', 'read("label:admin")', 'update("label:admin")', 'delete("label:admin")'],
+    collectionPermissions: withAppDev(['create("users")', 'read("label:admin")', 'update("label:admin")', 'delete("label:admin")']),
     attributes: [
       {
         type: 'enum',
@@ -184,7 +219,7 @@ export const STORAGE_BUCKETS = [
   {
     id: 'job_attachments',
     name: 'Job Attachments',
-    permissions: ['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")'],
+    permissions: withAppDev(['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")']),
     fileSecurity: false,
     maximumFileSize: 20 * 1024 * 1024,
     allowedFileExtensions: ['jpg', 'jpeg', 'png', 'heic', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'],

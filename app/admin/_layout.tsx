@@ -23,17 +23,10 @@ export default function AdminLayout() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerStyle: { backgroundColor: colors.white },
-        headerTintColor: colors.black,
-        headerTitleStyle: { fontWeight: '600' },
-        headerShadowVisible: false,
-        contentStyle: { backgroundColor: colors.background },
-      }}
-    >
-      <Stack.Screen name="accounts/index" options={{ title: 'Manage accounts' }} />
-      <Stack.Screen name="accounts/create" options={{ title: 'Create account' }} />
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="accounts/index" />
+      <Stack.Screen name="accounts/create" />
     </Stack>
   );
 }

@@ -7,15 +7,20 @@
  *   npm run appwrite:set-admin <email>    Grant the 'admin' label to a user
  *   npm run appwrite:unset-admin <email>  Remove the 'admin' label from a user
  *   npm run appwrite:list-admins          Show every user that has the admin label
+ *   npm run appwrite:set-app-dev <email>  Grant the 'app-dev' label + App Dev role
+ *   npm run appwrite:unset-app-dev <email> Remove the 'app-dev' label
+ *   npm run appwrite:list-app-devs        Show every user with the app-dev label
  */
 
 import { Databases, Query, Storage, Users } from 'node-appwrite';
 import { createAdminClient } from './client.mjs';
 import { APPWRITE } from './config.mjs';
 import { syncFunctions } from './sync-functions.mjs';
+import { syncPlatforms } from './sync-platforms.mjs';
 import { getSchemaStatus, syncSchema, syncStorage } from './sync-schema.mjs';
 
 const ADMIN_LABEL = 'admin';
+const APP_DEV_LABEL = 'appdev';
 const command = process.argv[2] ?? 'sync';
 const arg = process.argv[3];
 
@@ -44,6 +49,7 @@ async function runSync() {
   const storage = new Storage(createAdminClient());
   await syncSchema(databases);
   await syncStorage(storage);
+  await syncPlatforms();
 
   console.log('\nFunctions:');
   await syncFunctions();
@@ -95,19 +101,66 @@ async function runListAdmins() {
   for (const u of admins) console.log(`  ${u.email}  ${u.name ? `· ${u.name}` : ''}  [${u.$id}]`);
 }
 
+async function runSetAppDev() {
+  if (!arg) {
+    console.error('Usage: appwrite:set-app-dev <email>');
+    process.exit(1);
+  }
+  const users = new Users(createAdminClient());
+  const user = await findUserByEmail(users, arg);
+  const next = Array.from(new Set([...(user.labels ?? []), APP_DEV_LABEL]));
+  await users.updateLabels(user.$id, next);
+  const prefs = { ...(user.prefs ?? {}), position: 'App Dev' };
+  await users.updatePrefs(user.$id, prefs);
+  console.log(`\nGranted App Dev to ${user.email} (${user.$id})`);
+  console.log(`Labels: ${next.join(', ')}`);
+  console.log(`Position: ${prefs.position}`);
+}
+
+async function runUnsetAppDev() {
+  if (!arg) {
+    console.error('Usage: appwrite:unset-app-dev <email>');
+    process.exit(1);
+  }
+  const users = new Users(createAdminClient());
+  const user = await findUserByEmail(users, arg);
+  const next = (user.labels ?? []).filter((l) => l !== APP_DEV_LABEL);
+  await users.updateLabels(user.$id, next);
+  console.log(`\nRevoked App Dev from ${user.email} (${user.$id})`);
+  console.log(`Labels: ${next.length ? next.join(', ') : '(none)'}`);
+}
+
+async function runListAppDevs() {
+  const users = new Users(createAdminClient());
+  const list = await users.list();
+  const devs = list.users.filter((u) => (u.labels ?? []).includes(APP_DEV_LABEL));
+  if (!devs.length) {
+    console.log('\nNo App Dev users yet. Grant one with: npm run appwrite:set-app-dev <email>');
+    return;
+  }
+  console.log(`\nApp Dev (${devs.length}):`);
+  for (const u of devs) {
+    const position = u.prefs?.position ?? '';
+    console.log(`  ${u.email}  ${u.name ? `· ${u.name}` : ''}  ${position ? `· ${position}` : ''}  [${u.$id}]`);
+  }
+}
+
 const handlers = {
   sync: runSync,
   status: runStatus,
   'set-admin': runSetAdmin,
   'unset-admin': runUnsetAdmin,
   'list-admins': runListAdmins,
+  'set-app-dev': runSetAppDev,
+  'unset-app-dev': runUnsetAppDev,
+  'list-app-devs': runListAppDevs,
 };
 
 async function main() {
   const handler = handlers[command];
   if (!handler) {
     console.error(
-      `Unknown command: ${command}\nUsage: sync | status | set-admin <email> | unset-admin <email> | list-admins`,
+      `Unknown command: ${command}\nUsage: sync | status | set-admin <email> | unset-admin <email> | list-admins | set-app-dev <email> | unset-app-dev <email> | list-app-devs`,
     );
     process.exit(1);
   }

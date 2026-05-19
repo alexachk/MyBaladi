@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -17,7 +18,7 @@ import { ClientsSidebar } from '../../components/ClientsSidebar';
 import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
 import { JobCardItem } from '../../components/JobCardItem';
 import { PrimaryButton } from '../../components/PrimaryButton';
-import { colors, radius, spacing, typography } from '../../constants/theme';
+import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { useNotifications } from '../../context/NotificationsContext';
 import { JobStatus } from '../../types/jobCard';
@@ -98,16 +99,16 @@ export default function JobsScreen() {
           accessibilityLabel="Open clients"
           style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
         >
-          <Ionicons name="menu-outline" size={22} color={colors.black} />
+          <Ionicons name="menu-outline" size={layout.iconMd} color={colors.black} />
         </Pressable>
-        <BaladiLogo variant="compact" size={32} />
+        <BaladiLogo variant="compact" size={layout.logoCompact} />
         <View style={styles.topBarRight}>
           <Pressable
             onPress={() => router.push('/notifications')}
             accessibilityLabel="Open notifications"
             style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
           >
-            <Ionicons name="notifications-outline" size={20} color={colors.black} />
+            <Ionicons name="notifications-outline" size={layout.iconSm} color={colors.black} />
             {unread > 0 ? (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
@@ -119,14 +120,16 @@ export default function JobsScreen() {
             onPress={() => router.push('/job/new')}
             accessibilityLabel="Create job card"
           >
-            <Ionicons name="add" size={22} color={colors.black} />
+            <Ionicons name="add" size={layout.iconMd} color={colors.black} />
           </Pressable>
         </View>
       </View>
 
       <View style={styles.titleRow}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.screenTitle}>Job Cards</Text>
+          <Text style={styles.screenTitle} numberOfLines={1} allowFontScaling={false}>
+            Job Cards
+          </Text>
           <Text style={styles.screenSub}>
             {isAdmin ? 'All technicians · workspace view' : 'Your missions'}
           </Text>
@@ -196,27 +199,38 @@ export default function JobsScreen() {
         })}
       </ScrollView>
 
-      {loading ? (
-        <ActivityIndicator color={colors.primary} style={styles.loader} />
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing || syncing}
-              onRefresh={onRefresh}
-              tintColor={colors.primary}
-            />
-          }
-        >
-          {filtered.length === 0 ? (
+      <FlatList
+        style={styles.listScroll}
+        contentContainerStyle={[
+          styles.listContent,
+          filtered.length === 0 && styles.listContentEmpty,
+        ]}
+        data={filtered}
+        keyExtractor={(item) => item.id}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing || syncing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+        ListHeaderComponent={
+          loading && jobCards.length === 0 ? (
+            <ActivityIndicator color={colors.primary} style={styles.loader} />
+          ) : null
+        }
+        ListEmptyComponent={
+          loading && jobCards.length === 0 ? null : (
             <View style={styles.empty}>
               <Ionicons name="clipboard-outline" size={32} color={colors.grey400} />
-              <Text style={styles.emptyTitle}>No matching job cards</Text>
+              <Text style={styles.emptyTitle}>
+                {query.trim() || filter !== 'all' ? 'No matching job cards' : 'No job cards yet'}
+              </Text>
               <Text style={styles.emptyText}>
-                Create a new mission for your client. You can pre-fill details now and update them on
-                site.
+                {query.trim() || filter !== 'all'
+                  ? 'Try another filter or search term, or pull down to refresh.'
+                  : 'Create a new mission for your client. You can pre-fill details now and update them on site.'}
               </Text>
               <PrimaryButton
                 label="Create job card"
@@ -224,17 +238,12 @@ export default function JobsScreen() {
                 onPress={() => router.push('/job/new')}
               />
             </View>
-          ) : (
-            filtered.map((job) => (
-              <JobCardItem
-                key={job.id}
-                job={job}
-                onPress={() => router.push(`/job/${job.id}`)}
-              />
-            ))
-          )}
-        </ScrollView>
-      )}
+          )
+        }
+        renderItem={({ item }) => (
+          <JobCardItem job={item} onPress={() => router.push(`/job/${item.id}`)} />
+        )}
+      />
 
       <EdgeSwipeOpener edge="left" onOpen={() => setSidebarOpen(true)} />
       <EdgeSwipeOpener edge="right" onOpen={() => router.push('/notifications')} />
@@ -257,9 +266,9 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xs,
   },
   iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: layout.iconButtonSize,
+    height: layout.iconButtonSize,
+    borderRadius: layout.iconButtonSize / 2,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.grey200,
@@ -283,9 +292,9 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
   fab: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: layout.iconButtonSize,
+    height: layout.iconButtonSize,
+    borderRadius: layout.iconButtonSize / 2,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -298,7 +307,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
     gap: spacing.sm,
   },
-  screenTitle: { ...typography.title, color: colors.black },
+  screenTitle: { ...typography.screenTitle, color: colors.black },
   screenSub: { ...typography.caption, color: colors.grey600, marginTop: 2 },
   clientsBtn: {
     flexDirection: 'row',
@@ -376,10 +385,16 @@ const styles = StyleSheet.create({
   countTextActive: { color: colors.black },
   loader: {
     marginTop: spacing.xl,
+    marginBottom: spacing.lg,
   },
-  list: {
+  listScroll: { flex: 1 },
+  listContent: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xxl,
+  },
+  listContentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   empty: {
     alignItems: 'center',
@@ -389,7 +404,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.grey200,
     gap: spacing.md,
-    marginTop: spacing.lg,
   },
   emptyTitle: {
     ...typography.subheading,

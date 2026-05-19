@@ -15,8 +15,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BaladiLogo } from '../../components/BaladiLogo';
 import { MachineryBackground } from '../../components/MachineryBackground';
 import { APP_CREDIT, APP_VERSION } from '../../constants/app';
-import { colors, radius, shadow, spacing, typography } from '../../constants/theme';
+import { getRoleDescription, getRoleLabel } from '../../constants/positions';
+import { colors, layout, radius, shadow, spacing, typography } from '../../constants/theme';
 import { useAuth } from '../../context/JobCardsContext';
+import { getEffectivePosition, isAppDevUser } from '../../lib/appwrite/auth';
 import { appwriteConfig } from '../../lib/appwrite/config';
 import {
   clearCredentials,
@@ -24,9 +26,12 @@ import {
   hasSavedCredentials,
   type BiometricCapability,
 } from '../../lib/biometric';
+import { settingsConnectionDescription } from '../../constants/connection';
 
 export default function SettingsScreen() {
-  const { user, logout, isAdmin, isConfigured } = useAuth();
+  const { user, logout, isConfigured, isAdmin } = useAuth();
+  const showAppDevBadge = isAppDevUser(user);
+  const userPosition = getEffectivePosition(user);
   const [bio, setBio] = useState<BiometricCapability>({
     available: false,
     type: null,
@@ -73,8 +78,10 @@ export default function SettingsScreen() {
       <MachineryBackground opacity={0.1} position="bottom" />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <BaladiLogo variant="compact" size={36} />
-          <Text style={styles.headerTitle}>Settings</Text>
+          <BaladiLogo variant="compact" size={layout.logoCompact} />
+          <Text style={styles.headerTitle} numberOfLines={1} allowFontScaling={false}>
+            Settings
+          </Text>
         </View>
 
         <View style={styles.profileCard}>
@@ -84,16 +91,34 @@ export default function SettingsScreen() {
           <View style={styles.profileBody}>
             <View style={styles.profileNameRow}>
               <Text style={styles.profileName}>{user?.name ?? 'Signed out'}</Text>
-              {isAdmin ? (
-                <View style={styles.adminBadge}>
-                  <Ionicons name="shield-checkmark" size={11} color={colors.black} />
-                  <Text style={styles.adminBadgeText}>Admin</Text>
+              {showAppDevBadge ? (
+                <View style={[styles.adminBadge, styles.appDevBadge]}>
+                  <Ionicons name="code-slash" size={11} color={colors.black} />
+                  <Text style={styles.adminBadgeText}>App Dev</Text>
                 </View>
               ) : null}
             </View>
             <Text style={styles.profileEmail}>{user?.email ?? '—'}</Text>
+            {userPosition ? (
+              <Text style={styles.profileRole}>
+                {userPosition}
+                {getRoleLabel(userPosition) ? ` · ${getRoleLabel(userPosition)}` : ''}
+              </Text>
+            ) : null}
           </View>
         </View>
+
+        {isAdmin ? (
+          <Section title="Administrator">
+            <Row
+              icon="shield-checkmark-outline"
+              label="Operations console"
+              description="Accounts, team, and all job cards"
+              onPress={() => router.push('/admin')}
+              chevron
+            />
+          </Section>
+        ) : null}
 
         <Section title="Security">
           <Row
@@ -132,7 +157,7 @@ export default function SettingsScreen() {
           <Row
             icon="cloud-outline"
             label="Connection"
-            description={isConfigured ? 'Appwrite Cloud · Frankfurt' : 'Local mode'}
+            description={settingsConnectionDescription(isConfigured)}
             right={
               <View style={[styles.statusDot, { backgroundColor: isConfigured ? colors.success : colors.grey400 }]} />
             }
@@ -229,7 +254,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.lg },
   header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  headerTitle: { ...typography.title, color: colors.black },
+  headerTitle: { ...typography.screenTitle, color: colors.black },
   profileCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -263,7 +288,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   adminBadgeText: { fontSize: 10, fontWeight: '700', color: colors.black, letterSpacing: 0.3 },
+  appDevBadge: { backgroundColor: colors.infoLight },
   profileEmail: { ...typography.caption, color: colors.grey600 },
+  profileRole: { ...typography.caption, color: colors.grey600, marginTop: 2 },
   section: { gap: spacing.sm },
   sectionTitle: {
     ...typography.label,

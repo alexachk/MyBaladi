@@ -12,7 +12,10 @@
     "appwrite:status": "node --env-file=.env scripts/appwrite/cli.mjs status",
     "appwrite:set-admin": "node --env-file=.env scripts/appwrite/cli.mjs set-admin",
     "appwrite:unset-admin": "node --env-file=.env scripts/appwrite/cli.mjs unset-admin",
-    "appwrite:list-admins": "node --env-file=.env scripts/appwrite/cli.mjs list-admins"
+    "appwrite:list-admins": "node --env-file=.env scripts/appwrite/cli.mjs list-admins",
+    "appwrite:set-app-dev": "node --env-file=.env scripts/appwrite/cli.mjs set-app-dev",
+    "appwrite:unset-app-dev": "node --env-file=.env scripts/appwrite/cli.mjs unset-app-dev",
+    "appwrite:list-app-devs": "node --env-file=.env scripts/appwrite/cli.mjs list-app-devs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

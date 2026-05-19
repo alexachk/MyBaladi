@@ -155,7 +155,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.white,
   },
-  value: { flex: 1, ...typography.body, color: colors.black, fontSize: 15 },
+  value: { flex: 1, ...typography.body, color: colors.black, fontSize: 15, textAlign: 'left' },
   placeholder: { color: colors.grey400 },
   iosWrap: {
     marginTop: spacing.sm,

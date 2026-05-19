@@ -71,6 +71,7 @@ const styles = StyleSheet.create({
   multiline: {
     minHeight: 110,
     textAlignVertical: 'top',
+    textAlign: 'justify',
   },
   section: {
     marginBottom: spacing.lg,

@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 export const colors = {
   primary: '#F5BC00',
   primaryDark: '#D9A500',
@@ -38,12 +40,40 @@ export const radius = {
 } as const;
 
 export const typography = {
+  /** Marketing / hero only — too large for page chrome on Android */
   title: { fontSize: 28, fontWeight: '700' as const, letterSpacing: -0.5 },
+  /** In-screen page titles (Home greeting, Jobs, Settings, etc.) */
+  screenTitle: {
+    fontSize: Platform.OS === 'android' ? 22 : 28,
+    fontWeight: '700' as const,
+    letterSpacing: Platform.OS === 'android' ? -0.3 : -0.5,
+  },
+  /** Native stack header titles */
+  navTitle: {
+    fontSize: Platform.OS === 'android' ? 18 : 17,
+    fontWeight: '600' as const,
+  },
   heading: { fontSize: 20, fontWeight: '700' as const },
   subheading: { fontSize: 16, fontWeight: '600' as const },
   body: { fontSize: 15, fontWeight: '400' as const, lineHeight: 22 },
   caption: { fontSize: 13, fontWeight: '500' as const },
   label: { fontSize: 12, fontWeight: '600' as const, letterSpacing: 0.6, textTransform: 'uppercase' as const },
+};
+
+/** Shared sizes for top bars, tab bar, and header actions */
+export const layout = {
+  iconButtonSize: Platform.OS === 'android' ? 36 : 40,
+  iconSm: Platform.OS === 'android' ? 18 : 20,
+  iconMd: Platform.OS === 'android' ? 20 : 22,
+  iconLg: Platform.OS === 'android' ? 22 : 24,
+  tabIconSize: Platform.OS === 'android' ? 22 : 24,
+  /** Icon + label row — safe-area padding added in tab layout */
+  tabBarInnerHeight: Platform.OS === 'android' ? 52 : 48,
+  tabBarPaddingTop: Platform.OS === 'android' ? 6 : 8,
+  /** Minimum bottom pad when inset is 0 (fallback only) */
+  tabBarPaddingBottom: Platform.OS === 'android' ? 10 : 8,
+  logoCompact: Platform.OS === 'android' ? 32 : 36,
+  fabSize: Platform.OS === 'android' ? 48 : 56,
 };
 
 export const shadow = {

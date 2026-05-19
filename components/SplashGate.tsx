@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BaladiLogo } from './BaladiLogo';
 import { MachineryBackground } from './MachineryBackground';
 import { APP_CREDIT, APP_VERSION } from '../constants/app';
@@ -11,6 +12,8 @@ interface SplashGateProps {
 }
 
 export function SplashGate({ children, durationMs = 2500 }: SplashGateProps) {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, spacing.sm);
   const [done, setDone] = useState(false);
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.92)).current;
@@ -70,10 +73,10 @@ export function SplashGate({ children, durationMs = 2500 }: SplashGateProps) {
           <BaladiLogo variant="full" size={72} />
           <Text style={styles.tagline}>Heavy equipment & field services</Text>
         </Animated.View>
-        <View style={styles.progressTrack}>
+        <View style={[styles.progressTrack, { bottom: bottomInset + spacing.xxl + 24 }]}>
           <Animated.View style={[styles.progressBar, { width: barWidth }]} />
         </View>
-        <View style={styles.creditBlock}>
+        <View style={[styles.creditBlock, { bottom: bottomInset + spacing.lg }]}>
           <Text style={styles.credit}>{APP_CREDIT}</Text>
           <Text style={styles.version}>v{APP_VERSION}</Text>
         </View>
@@ -95,6 +98,7 @@ const styles = StyleSheet.create({
   },
   center: {
     alignItems: 'center',
+    width: '100%',
     gap: spacing.md,
   },
   tagline: {
@@ -102,10 +106,13 @@ const styles = StyleSheet.create({
     color: colors.grey600,
     letterSpacing: 1.5,
     textTransform: 'uppercase',
+    textAlign: 'center',
+    alignSelf: 'center',
+    width: '100%',
+    paddingHorizontal: spacing.md,
   },
   progressTrack: {
     position: 'absolute',
-    bottom: spacing.xxl + 24,
     left: spacing.xl,
     right: spacing.xl,
     height: 3,
@@ -119,7 +126,6 @@ const styles = StyleSheet.create({
   },
   creditBlock: {
     position: 'absolute',
-    bottom: spacing.lg,
     alignItems: 'center',
     gap: 2,
   },

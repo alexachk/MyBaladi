@@ -383,7 +383,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   infoLabel: { ...typography.caption, color: colors.grey600 },
-  infoValue: { ...typography.body, color: colors.black },
+  infoValue: { ...typography.body, color: colors.black, textAlign: 'left' },
   formCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
@@ -432,6 +432,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     marginBottom: spacing.md,
   },
-  companySelectorText: { flex: 1, ...typography.body, color: colors.black, fontSize: 15 },
+  companySelectorText: { flex: 1, ...typography.body, color: colors.black, fontSize: 15, textAlign: 'left' },
   pressed: { opacity: 0.85 },
 });

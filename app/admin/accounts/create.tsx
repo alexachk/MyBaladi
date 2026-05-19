@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -8,28 +8,71 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { FormField } from '../../../components/FormField';
+import { FormField, FormSection } from '../../../components/FormField';
+import { MultiValueField } from '../../../components/MultiValueField';
 import { PickerSheet } from '../../../components/PickerSheet';
 import { PrimaryButton } from '../../../components/PrimaryButton';
-import { POSITIONS } from '../../../constants/positions';
+import { StackPageHeader } from '../../../components/StackPageHeader';
+import {
+  ASSIGNABLE_POSITIONS,
+  getRoleDescription,
+  isPlatformRole,
+  managerOptionsForPosition,
+  positionPickerOptions,
+} from '../../../constants/positions';
 import { colors, radius, spacing, typography } from '../../../constants/theme';
-import { createAdminUser } from '../../../lib/appwrite/adminUsers';
+import {
+  invalidContactEmail,
+  normalizeContactEmails,
+  normalizeContactPhones,
+} from '../../../lib/contactFields';
+import { createAdminUser, listAdminUsers, type AdminUser } from '../../../lib/appwrite/adminUsers';
 
 export default function CreateAccountScreen() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [position, setPosition] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [managers, setManagers] = useState<AdminUser[]>([]);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
+  const [showManagerPicker, setShowManagerPicker] = useState(false);
   const [email, setEmail] = useState('');
+  const [contactPhones, setContactPhones] = useState(['']);
+  const [contactEmails, setContactEmails] = useState(['']);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [grantAdmin, setGrantAdmin] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    listAdminUsers()
+      .then(setManagers)
+      .catch(() => setManagers([]));
+  }, []);
+
+  const managerLabel = useMemo(() => {
+    if (!managerId) return '';
+    return managers.find((m) => m.id === managerId)?.name || managers.find((m) => m.id === managerId)?.email || '';
+  }, [managerId, managers]);
+
+  const eligibleManagers = useMemo(
+    () =>
+      position
+        ? managerOptionsForPosition(
+            position,
+            managers.map((m) => ({
+              id: m.id,
+              name: m.name,
+              email: m.email,
+              position: m.position,
+            })),
+          )
+        : [],
+    [position, managers],
+  );
 
   const handleCreate = async () => {
     const mail = email.trim().toLowerCase();
@@ -41,12 +84,25 @@ export default function CreateAccountScreen() {
       Alert.alert('Create account', 'First and family name are required.');
       return;
     }
+    if (!position || !(ASSIGNABLE_POSITIONS as readonly string[]).includes(position)) {
+      Alert.alert('Create account', 'Choose a role.');
+      return;
+    }
+    if (!isPlatformRole(position) && position !== 'Operations Manager' && !managerId) {
+      Alert.alert('Create account', 'Assign a manager (N+1) for this role.');
+      return;
+    }
     if (password.length < 8) {
       Alert.alert('Create account', 'Password must be at least 8 characters.');
       return;
     }
     if (password !== confirmPassword) {
       Alert.alert('Create account', 'Passwords do not match.');
+      return;
+    }
+    const badContactEmail = invalidContactEmail(contactEmails);
+    if (badContactEmail) {
+      Alert.alert('Create account', `Invalid email: ${badContactEmail}`);
       return;
     }
 
@@ -58,7 +114,9 @@ export default function CreateAccountScreen() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         position: position.trim(),
-        grantAdmin,
+        managerId: managerId || undefined,
+        contactPhones: normalizeContactPhones(contactPhones),
+        contactEmails: normalizeContactEmails(contactEmails),
       });
       Alert.alert('Account created', `${mail} can now sign in.`, [
         { text: 'OK', onPress: () => router.replace('/admin/accounts') },
@@ -72,14 +130,16 @@ export default function CreateAccountScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['bottom']}>
+    <View style={styles.safe}>
+      <StackPageHeader title="Create account" />
+      <SafeAreaView style={styles.flex} edges={['bottom']}>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={styles.lead}>
-            Create a technician or administrator account. They can sign in with email and password.
+            Create a team account. They can sign in with email and password.
           </Text>
 
           <View style={styles.row}>
@@ -103,18 +163,56 @@ export default function CreateAccountScreen() {
             </View>
           </View>
 
-          <Text style={styles.fieldLabel}>Position</Text>
+          <Text style={styles.fieldLabel}>Role</Text>
           <Pressable
             onPress={() => setShowPositionPicker(true)}
             style={({ pressed }) => [styles.selector, pressed && styles.pressed]}
           >
             <Ionicons name="briefcase-outline" size={18} color={colors.black} />
             <Text style={[styles.selectorText, !position && styles.placeholder]}>
-              {position || 'Tap to choose a position'}
+              {position || 'Choose role level'}
             </Text>
             <Ionicons name="chevron-down" size={16} color={colors.grey400} />
           </Pressable>
+          {position ? <Text style={styles.roleHint}>{getRoleDescription(position)}</Text> : null}
 
+          {position && !isPlatformRole(position) && position !== 'Operations Manager' ? (
+            <>
+              <Text style={styles.fieldLabel}>Reports to (N+1)</Text>
+              <Pressable
+                onPress={() => setShowManagerPicker(true)}
+                style={({ pressed }) => [styles.selector, pressed && styles.pressed]}
+              >
+                <Ionicons name="people-outline" size={18} color={colors.black} />
+                <Text style={[styles.selectorText, !managerId && styles.placeholder]}>
+                  {managerLabel || 'Choose manager'}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color={colors.grey400} />
+              </Pressable>
+            </>
+          ) : null}
+
+          <FormSection title="Contact">
+            <MultiValueField
+              label="Phone"
+              values={contactPhones}
+              onChange={setContactPhones}
+              placeholder="Phone number"
+              keyboardType="phone-pad"
+              addLabel="Add phone"
+            />
+            <MultiValueField
+              label="Email"
+              values={contactEmails}
+              onChange={setContactEmails}
+              placeholder="Email address"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              addLabel="Add email"
+            />
+          </FormSection>
+
+          <FormSection title="Sign-in">
           <FormField
             label="Email"
             value={email}
@@ -140,19 +238,7 @@ export default function CreateAccountScreen() {
             autoComplete="new-password"
             required
           />
-
-          <View style={styles.switchRow}>
-            <View style={styles.switchCopy}>
-              <Text style={styles.switchLabel}>Administrator access</Text>
-              <Text style={styles.switchHint}>Can manage accounts and operations console</Text>
-            </View>
-            <Switch
-              value={grantAdmin}
-              onValueChange={setGrantAdmin}
-              trackColor={{ false: colors.grey200, true: colors.primary }}
-              thumbColor={colors.white}
-            />
-          </View>
+          </FormSection>
 
           <PrimaryButton
             label={saving ? 'Creating…' : 'Create account'}
@@ -165,13 +251,32 @@ export default function CreateAccountScreen() {
 
       <PickerSheet
         visible={showPositionPicker}
-        title="Choose position"
-        options={POSITIONS.map((p) => ({ id: p, label: p, icon: 'briefcase-outline' }))}
-        searchPlaceholder="Search positions"
+        compact
+        title="Choose role"
+        options={positionPickerOptions()}
         onClose={() => setShowPositionPicker(false)}
-        onSelect={(opt) => setPosition(opt.label)}
+        onSelect={(opt) => {
+          setPosition(opt.label);
+          if (isPlatformRole(opt.label)) setManagerId('');
+          else setManagerId('');
+          setShowPositionPicker(false);
+        }}
       />
-    </SafeAreaView>
+      <PickerSheet
+        visible={showManagerPicker}
+        title="Choose manager"
+        options={eligibleManagers.map((m) => ({
+          id: m.id,
+          label: m.name || m.email,
+          hint: m.position || undefined,
+          icon: 'person-outline' as const,
+        }))}
+        searchPlaceholder="Search managers"
+        onClose={() => setShowManagerPicker(false)}
+        onSelect={(opt) => setManagerId(opt.id)}
+      />
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -196,20 +301,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   selectorText: { flex: 1, ...typography.body, color: colors.black, fontSize: 15 },
+  roleHint: { ...typography.caption, color: colors.grey600, marginTop: -spacing.sm, marginBottom: spacing.md },
   placeholder: { color: colors.grey400 },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.grey200,
-  },
-  switchCopy: { flex: 1, gap: 2 },
-  switchLabel: { ...typography.subheading, color: colors.black },
-  switchHint: { ...typography.caption, color: colors.grey600 },
   pressed: { opacity: 0.85 },
 });
