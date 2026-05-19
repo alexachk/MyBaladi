@@ -1,3 +1,4 @@
+import '../localStoragePolyfill';
 import 'react-native-url-polyfill/auto';
 import Constants from 'expo-constants';
 import { Account, Client, Databases } from 'react-native-appwrite';

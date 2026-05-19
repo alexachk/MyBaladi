@@ -1,0 +1,7 @@
+{
+  "name": "admin-users",
+  "type": "module",
+  "dependencies": {
+    "node-appwrite": "^17.2.0"
+  }
+}

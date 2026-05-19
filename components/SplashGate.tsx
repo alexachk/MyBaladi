@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { BaladiLogo } from './BaladiLogo';
 import { MachineryBackground } from './MachineryBackground';
+import { APP_CREDIT, APP_VERSION } from '../constants/app';
 import { colors, spacing, typography } from '../constants/theme';
 
 interface SplashGateProps {
@@ -72,7 +73,10 @@ export function SplashGate({ children, durationMs = 2500 }: SplashGateProps) {
         <View style={styles.progressTrack}>
           <Animated.View style={[styles.progressBar, { width: barWidth }]} />
         </View>
-        <Text style={styles.credit}>Made by Alexandre EL ACHKAR</Text>
+        <View style={styles.creditBlock}>
+          <Text style={styles.credit}>{APP_CREDIT}</Text>
+          <Text style={styles.version}>v{APP_VERSION}</Text>
+        </View>
       </Animated.View>
     </View>
   );
@@ -113,11 +117,20 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: colors.primary,
   },
-  credit: {
+  creditBlock: {
     position: 'absolute',
     bottom: spacing.lg,
+    alignItems: 'center',
+    gap: 2,
+  },
+  credit: {
     ...typography.caption,
     color: colors.grey400,
     fontStyle: 'italic',
+  },
+  version: {
+    fontSize: 11,
+    color: colors.grey400,
+    letterSpacing: 0.4,
   },
 });

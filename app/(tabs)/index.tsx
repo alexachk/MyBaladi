@@ -3,16 +3,19 @@ import { router } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BaladiLogo } from '../../components/BaladiLogo';
+import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
 import { JobCardItem } from '../../components/JobCardItem';
 import { MachineryBackground } from '../../components/MachineryBackground';
 import { PrimaryButton, StatCard } from '../../components/PrimaryButton';
 import { colors, radius, shadow, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
+import { useNotifications } from '../../context/NotificationsContext';
 import { todayIsoDate } from '../../utils/formatDate';
 
 export default function HomeScreen() {
   const { user, logout, isConfigured } = useAuth();
   const { jobCards, loading, syncing, isRemote } = useJobCards();
+  const { unread } = useNotifications();
   const today = todayIsoDate();
 
   const activeCount = jobCards.filter(
@@ -33,16 +36,31 @@ export default function HomeScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.topBar}>
           <BaladiLogo variant="compact" size={36} />
-          {isConfigured && user ? (
+          <View style={styles.topBarActions}>
             <Pressable
-              onPress={() => logout()}
+              onPress={() => router.push('/notifications')}
               style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
               hitSlop={8}
-              accessibilityLabel="Sign out"
+              accessibilityLabel="Open notifications"
             >
-              <Ionicons name="log-out-outline" size={20} color={colors.grey600} />
+              <Ionicons name="notifications-outline" size={20} color={colors.grey600} />
+              {unread > 0 ? (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
+                </View>
+              ) : null}
             </Pressable>
-          ) : null}
+            {isConfigured && user ? (
+              <Pressable
+                onPress={() => logout()}
+                style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+                hitSlop={8}
+                accessibilityLabel="Sign out"
+              >
+                <Ionicons name="log-out-outline" size={20} color={colors.grey600} />
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.greetingBlock}>
@@ -148,6 +166,7 @@ export default function HomeScreen() {
           </>
         )}
       </ScrollView>
+      <EdgeSwipeOpener edge="right" onOpen={() => router.push('/notifications')} />
     </SafeAreaView>
   );
 }
@@ -192,6 +211,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.grey200,
   },
+  topBarActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  bellBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  bellBadgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
   pressed: {
     opacity: 0.7,
   },

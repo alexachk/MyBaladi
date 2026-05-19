@@ -4,10 +4,16 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { colors } from '../constants/theme';
 import { SplashGate } from '../components/SplashGate';
+import { ClientsProvider } from '../context/ClientsContext';
 import { AuthProvider, JobCardsProvider, useAuth } from '../context/JobCardsContext';
+import { NotificationsProvider } from '../context/NotificationsContext';
+import { hydrateLocalStoragePolyfill } from '../lib/localStoragePolyfill';
+import { configureNotifications } from '../lib/notifications';
 import { verifyAppwriteSetup } from '../lib/appwrite/ping';
 
+void hydrateLocalStoragePolyfill();
 verifyAppwriteSetup();
+configureNotifications().catch(() => undefined);
 
 function RootNavigator() {
   const { user, loading, isConfigured } = useAuth();
@@ -50,12 +56,25 @@ function RootNavigator() {
         }}
       >
         <Stack.Screen name="login" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="(tabs)"
+          options={{ headerShown: false, title: 'Home', headerBackTitle: 'Back' }}
+        />
         <Stack.Screen
           name="job/new"
           options={{ title: 'New Job Card', presentation: 'modal' }}
         />
         <Stack.Screen name="job/[id]" options={{ title: 'Job Card' }} />
+        <Stack.Screen name="job/sign/[id]" options={{ title: 'Sign off', presentation: 'modal' }} />
+        <Stack.Screen name="admin" options={{ headerShown: false }} />
+        <Stack.Screen name="clients" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="notifications"
+          options={{
+            title: 'Notifications',
+            headerBackTitle: 'Back',
+          }}
+        />
       </Stack>
     </>
   );
@@ -65,9 +84,13 @@ export default function RootLayout() {
   return (
     <SplashGate durationMs={2500}>
       <AuthProvider>
-        <JobCardsProvider>
-          <RootNavigator />
-        </JobCardsProvider>
+        <ClientsProvider>
+          <JobCardsProvider>
+            <NotificationsProvider>
+              <RootNavigator />
+            </NotificationsProvider>
+          </JobCardsProvider>
+        </ClientsProvider>
       </AuthProvider>
     </SplashGate>
   );

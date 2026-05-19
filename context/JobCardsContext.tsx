@@ -16,7 +16,9 @@ import {
   updateJobCardInAppwrite,
 } from '../lib/appwrite/jobCards';
 import { isAppwriteConfigured, isAppwriteDatabaseConfigured } from '../lib/appwrite/config';
-import { getCurrentSessionUser, loginWithEmail, logout } from '../lib/appwrite/auth';
+import { getCurrentSessionUser, isAdminUser, loginWithEmail, logout as logoutSession } from '../lib/appwrite/auth';
+import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated } from '../lib/notifyEvents';
+import { clearCredentials } from '../lib/biometric';
 import { JobCard } from '../types/jobCard';
 
 const STORAGE_KEY = '@mybaladi/job-cards';
@@ -26,6 +28,7 @@ interface AuthContextValue {
   user: Models.User<Models.Preferences> | null;
   loading: boolean;
   isConfigured: boolean;
+  isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -71,21 +74,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const handleLogout = useCallback(async () => {
     if (isConfigured) {
-      await logout();
+      await logoutSession();
     }
+    await clearCredentials().catch(() => undefined);
     setUser(null);
   }, [isConfigured]);
+
+  const isAdmin = isAdminUser(user);
 
   const value = useMemo(
     () => ({
       user,
       loading,
       isConfigured,
+      isAdmin,
       login,
       logout: handleLogout,
       refreshSession,
     }),
-    [user, loading, isConfigured, login, handleLogout, refreshSession],
+    [user, loading, isConfigured, isAdmin, login, handleLogout, refreshSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -100,7 +107,7 @@ export function useAuth() {
 }
 
 export function JobCardsProvider({ children }: { children: ReactNode }) {
-  const { user, isConfigured } = useAuth();
+  const { user, isConfigured, isAdmin } = useAuth();
   const [jobCards, setJobCards] = useState<JobCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -124,7 +131,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     setSyncing(true);
     try {
-      const cards = await fetchJobCardsFromAppwrite(user.$id);
+      const cards = await fetchJobCardsFromAppwrite(user.$id, { all: isAdmin });
       setJobCards(cards);
       await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(cards));
     } catch {
@@ -136,7 +143,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     } finally {
       setSyncing(false);
     }
-  }, [user]);
+  }, [user, isAdmin]);
 
   const refresh = useCallback(async () => {
     if (isRemote && user) {
@@ -162,6 +169,13 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
           AsyncStorage.setItem(CACHE_KEY, JSON.stringify(next));
           return next;
         });
+
+        notifyJobCreated(created, {
+          id: user.$id,
+          name: user.name || user.email,
+          isAdmin,
+        }).catch(() => undefined);
+
         return created;
       }
 
@@ -175,20 +189,55 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       await persistLocal([newJob, ...jobCards]);
       return newJob;
     },
-    [isRemote, user, jobCards, persistLocal],
+    [isRemote, user, jobCards, persistLocal, isAdmin],
   );
 
   const updateJobCard = useCallback(
     async (id: string, updates: Partial<JobCard>) => {
       if (isRemote) {
+        const before = jobCards.find((j) => j.id === id);
         await updateJobCardInAppwrite(id, updates);
+        let after: JobCard | undefined;
         setJobCards((prev) => {
           const next = prev.map((job) =>
             job.id === id ? { ...job, ...updates, updatedAt: new Date().toISOString() } : job,
           );
+          after = next.find((j) => j.id === id);
           AsyncStorage.setItem(CACHE_KEY, JSON.stringify(next));
           return next;
         });
+
+        if (user && before && after) {
+          const actor = { id: user.$id, name: user.name || user.email, isAdmin };
+
+          // Detect lifecycle transitions
+          const startedNow = !before.startedAt && after.startedAt;
+          const finishedNow = !before.finishedAt && after.finishedAt;
+          const lockedNow = !before.lockedAt && after.lockedAt;
+          const unlockedNow = before.lockedAt && !after.lockedAt;
+
+          if (lockedNow) {
+            notifyJobLifecycle(after, 'signed', actor).catch(() => undefined);
+          } else if (unlockedNow) {
+            notifyJobLifecycle(after, 'reopened', actor).catch(() => undefined);
+          } else if (finishedNow) {
+            notifyJobLifecycle(after, 'finished', actor).catch(() => undefined);
+          } else if (startedNow) {
+            notifyJobLifecycle(after, 'started', actor).catch(() => undefined);
+          } else {
+            // Generic update — only flag meaningful business fields
+            const watchFields: Array<keyof JobCard> = [
+              'reference', 'clientName', 'siteAddress', 'contactName', 'contactPhone',
+              'missionType', 'equipment', 'scheduledDate', 'scheduledTime', 'reminderAt',
+              'arrivalTime', 'departureTime', 'workPerformed', 'partsUsed', 'notes',
+              'status', 'priority', 'personId', 'companyId', 'photoIds', 'documentIds',
+            ];
+            const changed = watchFields.filter((k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]));
+            if (changed.length) {
+              notifyJobUpdated(after, actor, changed).catch(() => undefined);
+            }
+          }
+        }
         return;
       }
 
@@ -197,7 +246,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       );
       await persistLocal(next);
     },
-    [isRemote, jobCards, persistLocal],
+    [isRemote, jobCards, persistLocal, user, isAdmin],
   );
 
   const deleteJobCard = useCallback(

@@ -1,8 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { colors } from '../../constants/theme';
+import { useAuth } from '../../context/JobCardsContext';
 
 export default function TabsLayout() {
+  const { isAdmin } = useAuth();
+
   return (
     <Tabs
       screenOptions={{
@@ -37,6 +40,25 @@ export default function TabsLayout() {
           title: 'Job Cards',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="clipboard-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="admin"
+        options={{
+          href: isAdmin ? undefined : null,
+          title: 'Admin',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="shield-checkmark-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings-outline" size={size} color={color} />
           ),
         }}
       />

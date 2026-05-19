@@ -25,6 +25,13 @@ export function isAppwriteDatabaseConfigured(): boolean {
   return Boolean(appwriteConfig.databaseId && appwriteConfig.jobCardsCollectionId);
 }
 
+export const ADMIN_USERS_FUNCTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_ADMIN_USERS_FUNCTION_ID ?? 'admin_users';
+
+export function appwriteConsoleUsersUrl(): string {
+  return `https://cloud.appwrite.io/console/project-${appwriteConfig.projectId}/auth/users`;
+}
+
 /** Appwrite collection attributes — create these in the Appwrite Console. */
 export const APPWRITE_JOB_CARD_SCHEMA = {
   collectionId: 'job_cards',

@@ -13,24 +13,38 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BaladiLogo } from '../../components/BaladiLogo';
+import { ClientsSidebar } from '../../components/ClientsSidebar';
+import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
 import { JobCardItem } from '../../components/JobCardItem';
 import { PrimaryButton } from '../../components/PrimaryButton';
-import { colors, spacing, typography } from '../../constants/theme';
-import { useJobCards } from '../../context/JobCardsContext';
+import { colors, radius, spacing, typography } from '../../constants/theme';
+import { useAuth, useJobCards } from '../../context/JobCardsContext';
+import { useNotifications } from '../../context/NotificationsContext';
 import { JobStatus } from '../../types/jobCard';
 
-const FILTERS: Array<{ key: 'all' | JobStatus; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'in_progress', label: 'Active' },
-  { key: 'draft', label: 'Drafts' },
-  { key: 'completed', label: 'Done' },
+type FilterKey = 'all' | 'scheduled' | JobStatus;
+
+const FILTERS: Array<{
+  key: FilterKey;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  { key: 'all', label: 'All', icon: 'apps-outline' },
+  { key: 'scheduled', label: 'Scheduled', icon: 'calendar-outline' },
+  { key: 'in_progress', label: 'Active', icon: 'construct-outline' },
+  { key: 'draft', label: 'Drafts', icon: 'document-outline' },
+  { key: 'pending_review', label: 'Review', icon: 'time-outline' },
+  { key: 'completed', label: 'Done', icon: 'checkmark-circle-outline' },
 ];
 
 export default function JobsScreen() {
   const { jobCards, loading, refresh, syncing } = useJobCards();
+  const { isAdmin } = useAuth();
+  const { unread } = useNotifications();
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | JobStatus>('all');
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [refreshing, setRefreshing] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -41,16 +55,37 @@ export default function JobsScreen() {
     }
   };
 
+  const counts = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      all: jobCards.length,
+      scheduled: jobCards.filter((j) => j.scheduledDate && j.scheduledDate >= today && j.status !== 'completed').length,
+      in_progress: jobCards.filter((j) => j.status === 'in_progress').length,
+      draft: jobCards.filter((j) => j.status === 'draft').length,
+      pending_review: jobCards.filter((j) => j.status === 'pending_review').length,
+      completed: jobCards.filter((j) => j.status === 'completed').length,
+    } as Record<FilterKey, number>;
+  }, [jobCards]);
+
   const filtered = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
     return jobCards.filter((job) => {
-      const matchesFilter = filter === 'all' || job.status === filter;
+      const matchesFilter =
+        filter === 'all'
+          ? true
+          : filter === 'scheduled'
+            ? Boolean(job.scheduledDate) && job.scheduledDate >= today && job.status !== 'completed'
+            : job.status === filter;
+
       const q = query.trim().toLowerCase();
       const matchesQuery =
         !q ||
         job.reference.toLowerCase().includes(q) ||
         job.clientName.toLowerCase().includes(q) ||
-        job.siteAddress.toLowerCase().includes(q) ||
-        job.missionType.toLowerCase().includes(q);
+        (job.siteAddress ?? '').toLowerCase().includes(q) ||
+        (job.missionType ?? '').toLowerCase().includes(q) ||
+        (job.contactName ?? '').toLowerCase().includes(q);
+
       return matchesFilter && matchesQuery;
     });
   }, [jobCards, filter, query]);
@@ -58,13 +93,50 @@ export default function JobsScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.topBar}>
-        <BaladiLogo variant="compact" size={36} />
         <Pressable
-          style={styles.fab}
-          onPress={() => router.push('/job/new')}
-          accessibilityLabel="Create job card"
+          onPress={() => setSidebarOpen(true)}
+          accessibilityLabel="Open clients"
+          style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
         >
-          <Ionicons name="add" size={24} color={colors.black} />
+          <Ionicons name="menu-outline" size={22} color={colors.black} />
+        </Pressable>
+        <BaladiLogo variant="compact" size={32} />
+        <View style={styles.topBarRight}>
+          <Pressable
+            onPress={() => router.push('/notifications')}
+            accessibilityLabel="Open notifications"
+            style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
+          >
+            <Ionicons name="notifications-outline" size={20} color={colors.black} />
+            {unread > 0 ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.fab, pressed && styles.pressed]}
+            onPress={() => router.push('/job/new')}
+            accessibilityLabel="Create job card"
+          >
+            <Ionicons name="add" size={22} color={colors.black} />
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.titleRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.screenTitle}>Job Cards</Text>
+          <Text style={styles.screenSub}>
+            {isAdmin ? 'All technicians · workspace view' : 'Your missions'}
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => setSidebarOpen(true)}
+          style={({ pressed }) => [styles.clientsBtn, pressed && styles.pressed]}
+        >
+          <Ionicons name="people-outline" size={16} color={colors.black} />
+          <Text style={styles.clientsBtnText}>Clients</Text>
         </Pressable>
       </View>
 
@@ -73,28 +145,52 @@ export default function JobsScreen() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Search client, reference, site..."
+          placeholder="Search reference, client, site, contact…"
           placeholderTextColor={colors.grey400}
           style={styles.searchInput}
         />
+        {query ? (
+          <Pressable onPress={() => setQuery('')} hitSlop={10}>
+            <Ionicons name="close-circle" size={16} color={colors.grey400} />
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.filtersScroll}
         contentContainerStyle={styles.filters}
       >
         {FILTERS.map((item) => {
           const selected = filter === item.key;
+          const count = counts[item.key] ?? 0;
           return (
             <Pressable
               key={item.key}
               onPress={() => setFilter(item.key)}
-              style={[styles.filterChip, selected && styles.filterChipActive]}
+              style={({ pressed }) => [
+                styles.filterChip,
+                selected && styles.filterChipActive,
+                pressed && styles.pressed,
+              ]}
             >
+              <Ionicons
+                name={item.icon}
+                size={14}
+                color={selected ? colors.white : colors.grey600}
+              />
               <Text style={[styles.filterText, selected && styles.filterTextActive]}>
                 {item.label}
               </Text>
+              <View
+                style={[
+                  styles.countBubble,
+                  selected ? styles.countBubbleActive : styles.countBubbleIdle,
+                ]}
+              >
+                <Text style={[styles.countText, selected && styles.countTextActive]}>{count}</Text>
+              </View>
             </Pressable>
           );
         })}
@@ -114,18 +210,16 @@ export default function JobsScreen() {
             />
           }
         >
-          <Text style={styles.count}>
-            {filtered.length} job card{filtered.length === 1 ? '' : 's'}
-          </Text>
-
           {filtered.length === 0 ? (
             <View style={styles.empty}>
+              <Ionicons name="clipboard-outline" size={32} color={colors.grey400} />
               <Text style={styles.emptyTitle}>No matching job cards</Text>
               <Text style={styles.emptyText}>
-                Create a new job card for your current client mission.
+                Create a new mission for your client. You can pre-fill details now and update them on
+                site.
               </Text>
               <PrimaryButton
-                label="Create Job Card"
+                label="Create job card"
                 icon="add-circle-outline"
                 onPress={() => router.push('/job/new')}
               />
@@ -141,6 +235,10 @@ export default function JobsScreen() {
           )}
         </ScrollView>
       )}
+
+      <EdgeSwipeOpener edge="left" onOpen={() => setSidebarOpen(true)} />
+      <EdgeSwipeOpener edge="right" onOpen={() => router.push('/notifications')} />
+      <ClientsSidebar visible={sidebarOpen} onClose={() => setSidebarOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -156,16 +254,64 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.xs,
   },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topBarRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  badge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  badgeText: { color: colors.white, fontSize: 10, fontWeight: '700' },
   fab: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  screenTitle: { ...typography.title, color: colors.black },
+  screenSub: { ...typography.caption, color: colors.grey600, marginTop: 2 },
+  clientsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  clientsBtnText: { ...typography.caption, color: colors.black, fontWeight: '600' },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -175,41 +321,59 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.grey200,
-    borderRadius: 12,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   searchInput: {
     flex: 1,
     fontSize: 15,
     color: colors.black,
-    paddingVertical: spacing.sm,
+    paddingVertical: 10,
   },
+  filtersScroll: { flexGrow: 0 },
   filters: {
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
     gap: spacing.sm,
     paddingBottom: spacing.md,
+    alignItems: 'center',
   },
   filterChip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: radius.full,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.grey200,
   },
   filterChipActive: {
-    backgroundColor: colors.primaryLight,
-    borderColor: colors.primary,
+    backgroundColor: colors.black,
+    borderColor: colors.black,
   },
   filterText: {
     ...typography.caption,
     color: colors.grey600,
+    fontWeight: '600',
+    fontSize: 12,
   },
   filterTextActive: {
-    color: colors.black,
-    fontWeight: '700',
+    color: colors.white,
   },
+  countBubble: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countBubbleIdle: { backgroundColor: colors.grey100 },
+  countBubbleActive: { backgroundColor: colors.primary },
+  countText: { ...typography.caption, color: colors.grey600, fontSize: 10, fontWeight: '700', lineHeight: 12 },
+  countTextActive: { color: colors.black },
   loader: {
     marginTop: spacing.xl,
   },
@@ -217,19 +381,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xxl,
   },
-  count: {
-    ...typography.caption,
-    color: colors.grey600,
-    marginBottom: spacing.md,
-  },
   empty: {
     alignItems: 'center',
     padding: spacing.xl,
     backgroundColor: colors.white,
-    borderRadius: 16,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.grey200,
     gap: spacing.md,
+    marginTop: spacing.lg,
   },
   emptyTitle: {
     ...typography.subheading,
@@ -240,4 +400,5 @@ const styles = StyleSheet.create({
     color: colors.grey600,
     textAlign: 'center',
   },
+  pressed: { opacity: 0.85 },
 });
