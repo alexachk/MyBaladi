@@ -14,7 +14,7 @@ import { todayIsoDate } from '../../utils/formatDate';
 
 export default function HomeScreen() {
   const { user, logout, isConfigured } = useAuth();
-  const { jobCards, loading, syncing, isRemote } = useJobCards();
+  const { jobCards, loading, syncing, isRemote, usingCache } = useJobCards();
   const { unread } = useNotifications();
   const today = todayIsoDate();
 
@@ -70,16 +70,21 @@ export default function HomeScreen() {
           <Text style={styles.greetingSub}>Here is what is happening today.</Text>
           <View style={styles.statusRow}>
             {isRemote ? (
-              <View style={[styles.pill, styles.pillSuccess]}>
-                <View style={[styles.pillDot, { backgroundColor: colors.success }]} />
-                <Text style={[styles.pillText, { color: colors.success }]}>
-                  {syncing ? 'Syncing…' : 'Connected'}
+              <View style={[styles.pill, usingCache ? styles.pillWarn : styles.pillSuccess]}>
+                <View
+                  style={[
+                    styles.pillDot,
+                    { backgroundColor: usingCache ? colors.warning : colors.success },
+                  ]}
+                />
+                <Text style={[styles.pillText, { color: usingCache ? colors.warning : colors.success }]}>
+                  {syncing ? 'Syncing…' : usingCache ? 'Cached · offline' : 'Appwrite'}
                 </Text>
               </View>
             ) : (
               <View style={[styles.pill, styles.pillNeutral]}>
-                <Ionicons name="phone-portrait-outline" size={12} color={colors.grey600} />
-                <Text style={[styles.pillText, { color: colors.grey600 }]}>Local mode</Text>
+                <Ionicons name="cloud-offline-outline" size={12} color={colors.grey600} />
+                <Text style={[styles.pillText, { color: colors.grey600 }]}>Not connected</Text>
               </View>
             )}
             <Text style={styles.todayText}>{formatToday()}</Text>
@@ -257,6 +262,9 @@ const styles = StyleSheet.create({
   },
   pillSuccess: {
     backgroundColor: colors.successLight,
+  },
+  pillWarn: {
+    backgroundColor: colors.warningLight,
   },
   pillNeutral: {
     backgroundColor: colors.grey100,

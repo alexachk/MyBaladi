@@ -21,8 +21,9 @@ import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated } from '../lib/n
 import { clearCredentials } from '../lib/biometric';
 import { JobCard } from '../types/jobCard';
 
-const STORAGE_KEY = '@mybaladi/job-cards';
+/** Read-only snapshot after a successful Appwrite fetch (offline fallback only). */
 const CACHE_KEY = '@mybaladi/job-cards-cache';
+const LEGACY_LOCAL_KEY = '@mybaladi/job-cards';
 
 interface AuthContextValue {
   user: Models.User<Models.Preferences> | null;
@@ -38,7 +39,10 @@ interface JobCardsContextValue {
   jobCards: JobCard[];
   loading: boolean;
   syncing: boolean;
+  /** True when job cards are loaded from Appwrite (signed in + DB configured). */
   isRemote: boolean;
+  /** True when showing last cached fetch because Appwrite was unreachable. */
+  usingCache: boolean;
   refresh: () => Promise<void>;
   addJobCard: (job: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt'>) => Promise<JobCard>;
   updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>;
@@ -48,6 +52,24 @@ interface JobCardsContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const JobCardsContext = createContext<JobCardsContextValue | null>(null);
+
+async function writeCache(cards: JobCard[]) {
+  await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(cards)).catch(() => undefined);
+}
+
+async function readCache(): Promise<JobCard[] | null> {
+  const raw = await AsyncStorage.getItem(CACHE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as JobCard[];
+  } catch {
+    return null;
+  }
+}
+
+async function clearCache() {
+  await AsyncStorage.multiRemove([CACHE_KEY, LEGACY_LOCAL_KEY]).catch(() => undefined);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Models.User<Models.Preferences> | null>(null);
@@ -77,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await logoutSession();
     }
     await clearCredentials().catch(() => undefined);
+    await clearCache();
     setUser(null);
   }, [isConfigured]);
 
@@ -111,47 +134,58 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
   const [jobCards, setJobCards] = useState<JobCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [usingCache, setUsingCache] = useState(false);
+
   const isRemote = isConfigured && isAppwriteDatabaseConfigured() && Boolean(user);
 
-  const persistLocal = useCallback(async (cards: JobCard[]) => {
-    setJobCards(cards);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
-  }, []);
-
-  const loadLocal = useCallback(async () => {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      setJobCards(JSON.parse(raw) as JobCard[]);
-    } else {
-      setJobCards([]);
+  const requireSession = useCallback(() => {
+    if (!isAppwriteConfigured()) {
+      throw new Error('Appwrite is not configured. Add your project keys to .env.');
     }
-  }, []);
+    if (!isAppwriteDatabaseConfigured()) {
+      throw new Error('Appwrite database is not configured.');
+    }
+    if (!user) {
+      throw new Error('Sign in to manage job cards.');
+    }
+    return user;
+  }, [user]);
 
-  const loadRemote = useCallback(async () => {
-    if (!user) return;
+  const loadFromAppwrite = useCallback(async () => {
+    const sessionUser = requireSession();
     setSyncing(true);
     try {
-      const cards = await fetchJobCardsFromAppwrite(user.$id, { all: isAdmin });
+      const cards = await fetchJobCardsFromAppwrite(sessionUser.$id, { all: isAdmin });
       setJobCards(cards);
-      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(cards));
+      setUsingCache(false);
+      await writeCache(cards);
     } catch {
-      const cached = await AsyncStorage.getItem(CACHE_KEY);
-      if (cached) {
-        setJobCards(JSON.parse(cached) as JobCard[]);
+      const cached = await readCache();
+      if (cached?.length) {
+        setJobCards(cached);
+        setUsingCache(true);
+      } else {
+        setJobCards([]);
+        setUsingCache(false);
       }
       throw new Error('Unable to sync job cards from Appwrite.');
     } finally {
       setSyncing(false);
     }
-  }, [user, isAdmin]);
+  }, [requireSession, isAdmin]);
 
   const refresh = useCallback(async () => {
-    if (isRemote && user) {
-      await loadRemote();
+    if (!isRemote) {
+      setJobCards([]);
+      setUsingCache(false);
       return;
     }
-    await loadLocal();
-  }, [isRemote, user, loadRemote, loadLocal]);
+    await loadFromAppwrite();
+  }, [isRemote, loadFromAppwrite]);
+
+  useEffect(() => {
+    AsyncStorage.removeItem(LEGACY_LOCAL_KEY).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -162,108 +196,106 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
 
   const addJobCard = useCallback(
     async (job: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt'>) => {
-      if (isRemote && user) {
-        const created = await createJobCardInAppwrite(job, user.$id);
-        setJobCards((prev) => {
-          const next = [created, ...prev];
-          AsyncStorage.setItem(CACHE_KEY, JSON.stringify(next));
-          return next;
-        });
+      const sessionUser = requireSession();
+      const created = await createJobCardInAppwrite(job, sessionUser.$id);
+      setJobCards((prev) => {
+        const next = [created, ...prev];
+        writeCache(next);
+        return next;
+      });
+      setUsingCache(false);
 
-        notifyJobCreated(created, {
-          id: user.$id,
-          name: user.name || user.email,
-          isAdmin,
-        }).catch(() => undefined);
+      notifyJobCreated(created, {
+        id: sessionUser.$id,
+        name: sessionUser.name || sessionUser.email,
+        isAdmin,
+      }).catch(() => undefined);
 
-        return created;
-      }
-
-      const now = new Date().toISOString();
-      const newJob: JobCard = {
-        ...job,
-        id: `job_${Date.now()}`,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await persistLocal([newJob, ...jobCards]);
-      return newJob;
+      return created;
     },
-    [isRemote, user, jobCards, persistLocal, isAdmin],
+    [requireSession, isAdmin],
   );
 
   const updateJobCard = useCallback(
     async (id: string, updates: Partial<JobCard>) => {
-      if (isRemote) {
-        const before = jobCards.find((j) => j.id === id);
-        await updateJobCardInAppwrite(id, updates);
-        let after: JobCard | undefined;
-        setJobCards((prev) => {
-          const next = prev.map((job) =>
-            job.id === id ? { ...job, ...updates, updatedAt: new Date().toISOString() } : job,
+      const sessionUser = requireSession();
+      const before = jobCards.find((j) => j.id === id);
+      await updateJobCardInAppwrite(id, updates);
+      let after: JobCard | undefined;
+      setJobCards((prev) => {
+        const next = prev.map((job) =>
+          job.id === id ? { ...job, ...updates, updatedAt: new Date().toISOString() } : job,
+        );
+        after = next.find((j) => j.id === id);
+        writeCache(next);
+        return next;
+      });
+      setUsingCache(false);
+
+      if (before && after) {
+        const actor = { id: sessionUser.$id, name: sessionUser.name || sessionUser.email, isAdmin };
+
+        const startedNow = !before.startedAt && after.startedAt;
+        const finishedNow = !before.finishedAt && after.finishedAt;
+        const lockedNow = !before.lockedAt && after.lockedAt;
+        const unlockedNow = before.lockedAt && !after.lockedAt;
+
+        if (lockedNow) {
+          notifyJobLifecycle(after, 'signed', actor).catch(() => undefined);
+        } else if (unlockedNow) {
+          notifyJobLifecycle(after, 'reopened', actor).catch(() => undefined);
+        } else if (finishedNow) {
+          notifyJobLifecycle(after, 'finished', actor).catch(() => undefined);
+        } else if (startedNow) {
+          notifyJobLifecycle(after, 'started', actor).catch(() => undefined);
+        } else {
+          const watchFields: Array<keyof JobCard> = [
+            'reference',
+            'clientName',
+            'siteAddress',
+            'contactName',
+            'contactPhone',
+            'missionType',
+            'equipment',
+            'scheduledDate',
+            'scheduledTime',
+            'reminderAt',
+            'arrivalTime',
+            'departureTime',
+            'workPerformed',
+            'partsUsed',
+            'notes',
+            'status',
+            'priority',
+            'personId',
+            'companyId',
+            'photoIds',
+            'documentIds',
+          ];
+          const changed = watchFields.filter(
+            (k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]),
           );
-          after = next.find((j) => j.id === id);
-          AsyncStorage.setItem(CACHE_KEY, JSON.stringify(next));
-          return next;
-        });
-
-        if (user && before && after) {
-          const actor = { id: user.$id, name: user.name || user.email, isAdmin };
-
-          // Detect lifecycle transitions
-          const startedNow = !before.startedAt && after.startedAt;
-          const finishedNow = !before.finishedAt && after.finishedAt;
-          const lockedNow = !before.lockedAt && after.lockedAt;
-          const unlockedNow = before.lockedAt && !after.lockedAt;
-
-          if (lockedNow) {
-            notifyJobLifecycle(after, 'signed', actor).catch(() => undefined);
-          } else if (unlockedNow) {
-            notifyJobLifecycle(after, 'reopened', actor).catch(() => undefined);
-          } else if (finishedNow) {
-            notifyJobLifecycle(after, 'finished', actor).catch(() => undefined);
-          } else if (startedNow) {
-            notifyJobLifecycle(after, 'started', actor).catch(() => undefined);
-          } else {
-            // Generic update — only flag meaningful business fields
-            const watchFields: Array<keyof JobCard> = [
-              'reference', 'clientName', 'siteAddress', 'contactName', 'contactPhone',
-              'missionType', 'equipment', 'scheduledDate', 'scheduledTime', 'reminderAt',
-              'arrivalTime', 'departureTime', 'workPerformed', 'partsUsed', 'notes',
-              'status', 'priority', 'personId', 'companyId', 'photoIds', 'documentIds',
-            ];
-            const changed = watchFields.filter((k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]));
-            if (changed.length) {
-              notifyJobUpdated(after, actor, changed).catch(() => undefined);
-            }
+          if (changed.length) {
+            notifyJobUpdated(after, actor, changed).catch(() => undefined);
           }
         }
-        return;
       }
-
-      const next = jobCards.map((job) =>
-        job.id === id ? { ...job, ...updates, updatedAt: new Date().toISOString() } : job,
-      );
-      await persistLocal(next);
     },
-    [isRemote, jobCards, persistLocal, user, isAdmin],
+    [requireSession, jobCards, isAdmin],
   );
 
   const deleteJobCard = useCallback(
     async (id: string) => {
-      if (isRemote) {
-        await deleteJobCardFromAppwrite(id);
-        setJobCards((prev) => {
-          const next = prev.filter((job) => job.id !== id);
-          AsyncStorage.setItem(CACHE_KEY, JSON.stringify(next));
-          return next;
-        });
-        return;
-      }
-
-      await persistLocal(jobCards.filter((job) => job.id !== id));
+      requireSession();
+      await deleteJobCardFromAppwrite(id);
+      setJobCards((prev) => {
+        const next = prev.filter((job) => job.id !== id);
+        writeCache(next);
+        return next;
+      });
+      setUsingCache(false);
     },
-    [isRemote, jobCards, persistLocal],
+    [requireSession],
   );
 
   const getJobCard = useCallback(
@@ -277,6 +309,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       loading,
       syncing,
       isRemote,
+      usingCache,
       refresh,
       addJobCard,
       updateJobCard,
@@ -288,6 +321,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       loading,
       syncing,
       isRemote,
+      usingCache,
       refresh,
       addJobCard,
       updateJobCard,
