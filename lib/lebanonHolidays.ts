@@ -1,8 +1,10 @@
 /**
  * Lebanese public / government holidays for scheduling.
  *
- * Fixed dates follow Decree 15215. Islamic dates and one-offs are sourced from
- * BDL banking holidays / official gazette and updated per year in YEAR_ENTRIES.
+ * Fixed dates follow Decree 15215. Islamic dates and movable observances are
+ * sourced from BDL banking holidays / timeanddate.com and updated per year in
+ * YEAR_ENTRIES. Easter is computed (Western + Orthodox when they differ).
+ *
  * Update YEAR_ENTRIES each January from https://bdl.gov.lb/bankingholidays.php
  */
 
@@ -49,7 +51,7 @@ const NAME_AR: Record<string, string> = {
   Ashura: 'عاشوراء',
   'Beirut Port Memorial Day': 'ذكرى كارثة مرفأ بيروت',
   "Prophet Muhammad's Birthday": 'المولد النبوي الشريف',
-  'Public Holiday': 'عطلة رسمية',
+  'Papal Visit Holiday': 'عطلة زيارة البابا',
 };
 
 /** Gregorian dates that repeat every year (month 1–12). */
@@ -57,54 +59,58 @@ const FIXED_ENTRIES: HolidayEntry[] = [
   { month: 1, day: 1, name: "New Year's Day", nameAr: NAME_AR["New Year's Day"] },
   { month: 1, day: 6, name: 'Armenian Orthodox Christmas', nameAr: NAME_AR['Armenian Orthodox Christmas'] },
   { month: 2, day: 9, name: "St Maroun's Day", nameAr: NAME_AR["St Maroun's Day"] },
+  { month: 2, day: 14, name: 'Rafic Hariri Memorial Day', nameAr: NAME_AR['Rafic Hariri Memorial Day'] },
   { month: 3, day: 25, name: 'Feast of the Annunciation', nameAr: NAME_AR['Feast of the Annunciation'] },
   { month: 5, day: 1, name: 'Labor Day', nameAr: NAME_AR['Labor Day'] },
+  { month: 5, day: 25, name: 'South Liberation Day', nameAr: NAME_AR['South Liberation Day'] },
   { month: 8, day: 15, name: 'Assumption of Mary', nameAr: NAME_AR['Assumption of Mary'] },
   { month: 11, day: 22, name: 'Independence Day', nameAr: NAME_AR['Independence Day'] },
   { month: 12, day: 25, name: 'Christmas Day', nameAr: NAME_AR['Christmas Day'] },
 ];
 
 /**
- * Year-specific holidays (Islamic, Easter-related when not computed, memorials).
+ * Year-specific holidays (Islamic + movable May observances + one-offs).
+ * Easter is always computed — do not add here.
  */
 const YEAR_ENTRIES: Record<
   number,
   Array<{ date: string; name: string; tentative?: boolean }>
 > = {
+  2024: [
+    { date: '2024-04-10', name: 'Eid al-Fitr', tentative: true },
+    { date: '2024-04-11', name: 'Eid al-Fitr Holiday', tentative: true },
+    { date: '2024-04-12', name: 'Eid al-Fitr Holiday', tentative: true },
+    { date: '2024-04-13', name: 'Eid al-Fitr Holiday', tentative: true },
+    { date: '2024-05-05', name: "Martyrs' Day" },
+    { date: '2024-05-12', name: 'Liberation & Resistance Day' },
+    { date: '2024-06-16', name: 'Eid al-Adha', tentative: true },
+    { date: '2024-06-17', name: 'Eid al-Adha Holiday', tentative: true },
+    { date: '2024-06-18', name: 'Eid al-Adha Holiday', tentative: true },
+    { date: '2024-07-07', name: 'Islamic New Year', tentative: true },
+    { date: '2024-07-16', name: 'Ashura', tentative: true },
+    { date: '2024-09-15', name: "Prophet Muhammad's Birthday", tentative: true },
+  ],
   2025: [
-    { date: '2025-02-14', name: 'Rafic Hariri Memorial Day' },
     { date: '2025-03-30', name: 'Eid al-Fitr', tentative: true },
     { date: '2025-03-31', name: 'Eid al-Fitr Holiday', tentative: true },
-    { date: '2025-04-18', name: 'Good Friday' },
-    { date: '2025-04-20', name: 'Easter Sunday' },
-    { date: '2025-04-21', name: 'Easter Monday' },
     { date: '2025-05-04', name: "Martyrs' Day" },
     { date: '2025-05-11', name: 'Liberation & Resistance Day' },
-    { date: '2025-05-25', name: 'South Liberation Day' },
     { date: '2025-06-06', name: 'Eid al-Adha', tentative: true },
     { date: '2025-06-07', name: 'Eid al-Adha Holiday', tentative: true },
     { date: '2025-06-26', name: 'Islamic New Year', tentative: true },
     { date: '2025-07-05', name: 'Ashura', tentative: true },
     { date: '2025-08-04', name: 'Beirut Port Memorial Day' },
     { date: '2025-09-04', name: "Prophet Muhammad's Birthday", tentative: true },
-    { date: '2025-12-01', name: 'Public Holiday' },
-    { date: '2025-12-02', name: 'Public Holiday' },
+    { date: '2025-12-01', name: 'Papal Visit Holiday' },
+    { date: '2025-12-02', name: 'Papal Visit Holiday' },
   ],
   2026: [
-    { date: '2026-02-14', name: 'Rafic Hariri Memorial Day' },
     { date: '2026-03-20', name: 'Eid al-Fitr', tentative: true },
     { date: '2026-03-21', name: 'Eid al-Fitr Holiday', tentative: true },
     { date: '2026-03-22', name: 'Eid al-Fitr Holiday', tentative: true },
     { date: '2026-03-23', name: 'Eid al-Fitr Holiday', tentative: true },
-    { date: '2026-04-03', name: 'Good Friday (Western)' },
-    { date: '2026-04-05', name: 'Easter Sunday (Western)' },
-    { date: '2026-04-06', name: 'Easter Monday (Western)' },
-    { date: '2026-04-10', name: 'Good Friday (Orthodox)' },
-    { date: '2026-04-12', name: 'Easter Sunday (Orthodox)' },
-    { date: '2026-04-13', name: 'Easter Monday (Orthodox)' },
     { date: '2026-05-03', name: "Martyrs' Day" },
     { date: '2026-05-10', name: 'Liberation & Resistance Day' },
-    { date: '2026-05-25', name: 'South Liberation Day' },
     { date: '2026-05-27', name: 'Eid al-Adha', tentative: true },
     { date: '2026-05-28', name: 'Eid al-Adha Holiday', tentative: true },
     { date: '2026-06-17', name: 'Islamic New Year', tentative: true },
@@ -112,22 +118,26 @@ const YEAR_ENTRIES: Record<
     { date: '2026-08-26', name: "Prophet Muhammad's Birthday", tentative: true },
   ],
   2027: [
-    { date: '2027-02-14', name: 'Rafic Hariri Memorial Day' },
     { date: '2027-03-10', name: 'Eid al-Fitr', tentative: true },
     { date: '2027-03-11', name: 'Eid al-Fitr Holiday', tentative: true },
-    { date: '2027-03-26', name: 'Good Friday (Western)' },
-    { date: '2027-03-28', name: 'Easter Sunday (Western)' },
-    { date: '2027-03-29', name: 'Easter Monday (Western)' },
-    { date: '2027-04-30', name: 'Good Friday (Orthodox)' },
-    { date: '2027-05-02', name: 'Easter Sunday (Orthodox)' },
-    { date: '2027-05-03', name: 'Easter Monday (Orthodox)' },
-    { date: '2027-05-03', name: "Martyrs' Day" },
-    { date: '2027-05-10', name: 'Liberation & Resistance Day' },
+    { date: '2027-05-02', name: "Martyrs' Day" },
+    { date: '2027-05-09', name: 'Liberation & Resistance Day' },
     { date: '2027-05-17', name: 'Eid al-Adha', tentative: true },
     { date: '2027-05-18', name: 'Eid al-Adha Holiday', tentative: true },
-    { date: '2027-06-07', name: 'Islamic New Year', tentative: true },
-    { date: '2027-06-16', name: 'Ashura', tentative: true },
-    { date: '2027-08-16', name: "Prophet Muhammad's Birthday", tentative: true },
+    { date: '2027-06-06', name: 'Islamic New Year', tentative: true },
+    { date: '2027-06-15', name: 'Ashura', tentative: true },
+    { date: '2027-08-15', name: "Prophet Muhammad's Birthday", tentative: true },
+  ],
+  2028: [
+    { date: '2028-02-27', name: 'Eid al-Fitr', tentative: true },
+    { date: '2028-02-28', name: 'Eid al-Fitr Holiday', tentative: true },
+    { date: '2028-05-05', name: 'Eid al-Adha', tentative: true },
+    { date: '2028-05-06', name: 'Eid al-Adha Holiday', tentative: true },
+    { date: '2028-05-07', name: "Martyrs' Day" },
+    { date: '2028-05-07', name: 'Liberation & Resistance Day' },
+    { date: '2028-05-25', name: 'Islamic New Year', tentative: true },
+    { date: '2028-06-03', name: 'Ashura', tentative: true },
+    { date: '2028-08-03', name: "Prophet Muhammad's Birthday", tentative: true },
   ],
 };
 
@@ -201,9 +211,7 @@ function addDays(date: Date, days: number): Date {
   return next;
 }
 
-function easterHolidays(year: number, map: Map<string, LebanonHoliday[]>, yearHasExplicitEaster: boolean) {
-  if (yearHasExplicitEaster) return;
-
+function easterHolidays(year: number, map: Map<string, LebanonHoliday[]>) {
   const western = westernEasterSunday(year);
   const orthodox = orthodoxEasterSunday(year);
   const sameEaster =
@@ -250,7 +258,6 @@ function easterHolidays(year: number, map: Map<string, LebanonHoliday[]>, yearHa
 export function getLebanonHolidays(year: number): LebanonHoliday[] {
   const map = new Map<string, LebanonHoliday[]>();
   const yearEntries = YEAR_ENTRIES[year] ?? [];
-  const yearHasExplicitEaster = yearEntries.some((e) => /good friday|easter/i.test(e.name));
 
   for (const fixed of fixedForYear(year)) {
     addHoliday(map, fixed.date, fixed);
@@ -260,7 +267,7 @@ export function getLebanonHolidays(year: number): LebanonHoliday[] {
     addHoliday(map, entry.date, makeHoliday(entry.date, entry.name, entry.tentative));
   }
 
-  easterHolidays(year, map, yearHasExplicitEaster);
+  easterHolidays(year, map);
 
   return [...map.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -299,4 +306,8 @@ export function lebanonHolidayYearsAvailable(): number[] {
   return Object.keys(YEAR_ENTRIES)
     .map(Number)
     .sort((a, b) => a - b);
+}
+
+export function hasFullLebanonHolidayYear(year: number): boolean {
+  return year in YEAR_ENTRIES;
 }

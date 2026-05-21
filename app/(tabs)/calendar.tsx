@@ -23,7 +23,7 @@ import { getDescendantIds, memberName } from '../../lib/orgHierarchy';
 import {
   formatHolidayList,
   getLebanonHolidaysByDate,
-  lebanonHolidayYearsAvailable,
+  hasFullLebanonHolidayYear,
 } from '../../lib/lebanonHolidays';
 import { syncPhoneCalendar } from '../../lib/phoneCalendarSync';
 import { compareJobSchedule, addDaysIso, isoDateParts } from '../../utils/calendarGrid';
@@ -431,9 +431,9 @@ export default function CalendarScreen() {
           </View>
         ) : null}
 
-        {!lebanonHolidayYearsAvailable().includes(year) ? (
+        {!hasFullLebanonHolidayYear(year) ? (
           <Text style={styles.holidayNote}>
-            Fixed holidays shown · العطل الثابتة معروضة. Update app for {year} lunar dates.
+            Fixed + Easter holidays shown · العطل الثابتة معروضة. Lunar dates need app update for {year}.
           </Text>
         ) : null}
 

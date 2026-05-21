@@ -161,13 +161,14 @@ export default function JobsScreen() {
         ) : null}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filtersScroll}
-        contentContainerStyle={styles.filters}
-      >
-        {FILTERS.map((item) => {
+      <View style={styles.filtersWrap}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filtersScroll}
+          contentContainerStyle={styles.filters}
+        >
+          {FILTERS.map((item) => {
           const selected = filter === item.key;
           const count = counts[item.key] ?? 0;
           return (
@@ -199,7 +200,8 @@ export default function JobsScreen() {
             </Pressable>
           );
         })}
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       <FlatList
         style={styles.listScroll}
@@ -342,12 +344,15 @@ const styles = StyleSheet.create({
     color: colors.black,
     paddingVertical: 10,
   },
+  filtersWrap: {
+    paddingHorizontal: spacing.lg,
+  },
   filtersScroll: { flexGrow: 0 },
   filters: {
-    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
     gap: spacing.sm,
     paddingBottom: spacing.md,
+    paddingRight: spacing.xs,
     alignItems: 'center',
   },
   filterChip: {
