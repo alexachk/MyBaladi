@@ -8,6 +8,12 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "scheme": "mybaladi",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/b781b775-2e37-4dcb-beed-d841f80fe400"
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
