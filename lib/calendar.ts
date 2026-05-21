@@ -1,7 +1,7 @@
 import * as Calendar from 'expo-calendar';
 import { Platform } from 'react-native';
 
-async function ensurePermission(): Promise<boolean> {
+export async function ensureCalendarPermission(): Promise<boolean> {
   const current = await Calendar.getCalendarPermissionsAsync();
   if (current.granted) return true;
   const next = await Calendar.requestCalendarPermissionsAsync();
@@ -22,22 +22,28 @@ async function pickWritableCalendar(): Promise<string | null> {
   return (owned ?? writable[0]).id;
 }
 
-export async function createCalendarEvent(input: {
+type EventInput = {
   title: string;
   notes?: string;
   location?: string;
   startDate: Date;
   endDate?: Date;
+  allDay?: boolean;
   alarmMinutesBefore?: number;
-}): Promise<string | null> {
-  const granted = await ensurePermission();
+};
+
+export async function createCalendarEvent(input: EventInput): Promise<string | null> {
+  const granted = await ensureCalendarPermission();
   if (!granted) return null;
 
   const calendarId = await pickWritableCalendar();
   if (!calendarId) return null;
 
   const endDate =
-    input.endDate ?? new Date(input.startDate.getTime() + 60 * 60 * 1000); // default 1h
+    input.endDate ??
+    (input.allDay
+      ? new Date(input.startDate.getFullYear(), input.startDate.getMonth(), input.startDate.getDate() + 1)
+      : new Date(input.startDate.getTime() + 60 * 60 * 1000));
 
   const eventId = await Calendar.createEventAsync(calendarId, {
     title: input.title,
@@ -45,12 +51,45 @@ export async function createCalendarEvent(input: {
     location: input.location,
     startDate: input.startDate,
     endDate,
+    allDay: input.allDay,
     alarms:
       input.alarmMinutesBefore !== undefined
         ? [{ relativeOffset: -Math.abs(input.alarmMinutesBefore) }]
         : undefined,
   });
   return eventId;
+}
+
+export async function createAllDayCalendarEvent(input: {
+  title: string;
+  notes?: string;
+  startDate: Date;
+}): Promise<string | null> {
+  return createCalendarEvent({
+    ...input,
+    allDay: true,
+  });
+}
+
+export async function updateCalendarEvent(eventId: string, input: EventInput): Promise<void> {
+  const endDate =
+    input.endDate ??
+    (input.allDay
+      ? new Date(input.startDate.getFullYear(), input.startDate.getMonth(), input.startDate.getDate() + 1)
+      : new Date(input.startDate.getTime() + 60 * 60 * 1000));
+
+  await Calendar.updateEventAsync(eventId, {
+    title: input.title,
+    notes: input.notes,
+    location: input.location,
+    startDate: input.startDate,
+    endDate,
+    allDay: input.allDay,
+    alarms:
+      input.alarmMinutesBefore !== undefined
+        ? [{ relativeOffset: -Math.abs(input.alarmMinutesBefore) }]
+        : undefined,
+  });
 }
 
 export async function removeCalendarEvent(eventId: string | null | undefined) {

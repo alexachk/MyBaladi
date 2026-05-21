@@ -18,6 +18,7 @@ interface MonthCalendarProps {
   month: number;
   selectedDate: string;
   markersByDate: Record<string, DayMarker[]>;
+  holidaysByDate?: Record<string, string[]>;
   onSelectDate: (iso: string) => void;
   onMonthChange: (year: number, month: number) => void;
   embedded?: boolean;
@@ -32,6 +33,7 @@ export function MonthCalendar({
   month,
   selectedDate,
   markersByDate,
+  holidaysByDate = {},
   onSelectDate,
   onMonthChange,
   embedded = false,
@@ -76,6 +78,8 @@ export function MonthCalendar({
       <View style={styles.grid}>
         {cells.map((cell) => {
           const markers = markersByDate[cell.iso] ?? [];
+          const holidayLabels = holidaysByDate[cell.iso] ?? [];
+          const isHoliday = holidayLabels.length > 0;
           const isSelected = cell.iso === selectedDate;
           const isToday = cell.iso === today;
           const visible = markers.slice(0, MAX_DOTS);
@@ -88,6 +92,7 @@ export function MonthCalendar({
               style={({ pressed }) => [
                 styles.cell,
                 !cell.inMonth && styles.cellOutside,
+                isHoliday && !isSelected && styles.cellHoliday,
                 isSelected && styles.cellSelected,
                 isToday && !isSelected && styles.cellToday,
                 pressed && styles.pressed,
@@ -97,11 +102,15 @@ export function MonthCalendar({
                 style={[
                   styles.dayText,
                   !cell.inMonth && styles.dayTextOutside,
+                  isHoliday && !isSelected && styles.dayTextHoliday,
                   isSelected && styles.dayTextSelected,
                 ]}
               >
                 {cell.day}
               </Text>
+              {isHoliday ? (
+                <View style={[styles.holidayPip, isSelected && styles.holidayPipSelected]} />
+              ) : null}
               {markers.length === 0 ? (
                 <View style={styles.markerSpacer} />
               ) : markers.length === 1 ? (
@@ -187,11 +196,21 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   cellOutside: { opacity: 0.35 },
+  cellHoliday: { backgroundColor: '#FFF8E8' },
   cellSelected: { backgroundColor: colors.black },
   cellToday: { borderWidth: 1, borderColor: colors.primary },
   dayText: { ...typography.caption, color: colors.black, fontWeight: '600' },
   dayTextOutside: { color: colors.grey600 },
+  dayTextHoliday: { color: colors.warning },
   dayTextSelected: { color: colors.white },
+  holidayPip: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.error,
+    marginTop: 1,
+  },
+  holidayPipSelected: { backgroundColor: colors.primary },
   markerSpacer: { height: 16, marginTop: 2 },
   singleMarker: {
     marginTop: 2,

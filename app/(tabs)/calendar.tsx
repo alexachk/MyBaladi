@@ -3,6 +3,9 @@ import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Linking,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -17,6 +20,12 @@ import { getRoleLabel } from '../../constants/positions';
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { getDescendantIds, memberName } from '../../lib/orgHierarchy';
+import {
+  formatHolidayList,
+  getLebanonHolidaysByDate,
+  lebanonHolidayYearsAvailable,
+} from '../../lib/lebanonHolidays';
+import { syncPhoneCalendar } from '../../lib/phoneCalendarSync';
 import { compareJobSchedule, addDaysIso, isoDateParts } from '../../utils/calendarGrid';
 import { formatDate, todayIsoDate } from '../../utils/formatDate';
 import { memberAccentColor } from '../../utils/teamColors';
@@ -62,7 +71,7 @@ function buildMarkersByDate(
 
 export default function CalendarScreen() {
   const { user } = useAuth();
-  const { jobCards, loading, syncing, refresh, canViewTeam, teamMembers, directReports } =
+  const { jobCards, loading, syncing, refresh, canViewTeam, teamMembers, directReports, updateJobCard } =
     useJobCards();
   const today = todayIsoDate();
   const todayParts = isoDateParts(today);
@@ -74,6 +83,7 @@ export default function CalendarScreen() {
   const [personFilter, setPersonFilter] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showCalendar, setShowCalendar] = useState(true);
+  const [phoneSyncing, setPhoneSyncing] = useState(false);
 
   const scheduledJobs = useMemo(
     () => jobCards.filter((j) => Boolean(j.scheduledDate)),
@@ -126,6 +136,23 @@ export default function CalendarScreen() {
     return {};
   }, [scopedJobs, scope, user, teamMemberIds, colorForMember]);
 
+  const holidaysByDate = useMemo(() => {
+    const years = new Set([year, month === 0 ? year - 1 : year, month === 11 ? year + 1 : year]);
+    const merged: Record<string, string[]> = {};
+    for (const y of years) {
+      const yearMap = getLebanonHolidaysByDate(y);
+      for (const [date, holidays] of Object.entries(yearMap)) {
+        merged[date] = holidays.map((h) => h.name);
+      }
+    }
+    return merged;
+  }, [year, month]);
+
+  const selectedHolidays = useMemo(
+    () => getLebanonHolidaysByDate(isoDateParts(selectedDate).year)[selectedDate] ?? [],
+    [selectedDate],
+  );
+
   const dayJobs = useMemo(
     () =>
       scopedJobs
@@ -163,6 +190,75 @@ export default function CalendarScreen() {
     selectDate(addDaysIso(selectedDate, delta));
   };
 
+  const runPhoneSync = async (includeJobs: boolean, includeHolidays: boolean) => {
+    if (!user) return;
+    setPhoneSyncing(true);
+    try {
+      const result = await syncPhoneCalendar({
+        jobs: scopedJobs,
+        userId: user.$id,
+        years: [year, year - 1, year + 1],
+        includeJobs,
+        includeHolidays,
+        updateJobCard,
+      });
+
+      if (result.permissionDenied) {
+        Alert.alert(
+          'Calendar access',
+          'Allow calendar access to sync missions and holidays to your phone.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+
+      const parts: string[] = [];
+      if (includeJobs) {
+        parts.push(`${result.jobsSynced} mission${result.jobsSynced === 1 ? '' : 's'}`);
+      }
+      if (includeHolidays) {
+        parts.push(`${result.holidaysSynced} holiday${result.holidaysSynced === 1 ? '' : 's'}`);
+      }
+
+      Alert.alert(
+        'Phone calendar',
+        parts.length ? `Synced ${parts.join(' and ')}.` : 'Nothing to sync.',
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to sync calendar.';
+      Alert.alert('Phone calendar', message);
+    } finally {
+      setPhoneSyncing(false);
+    }
+  };
+
+  const handlePhoneSync = () => {
+    Alert.alert('Sync to phone calendar', 'Choose what to add or update on this device.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Missions only',
+        onPress: () => {
+          void runPhoneSync(true, false);
+        },
+      },
+      {
+        text: 'Holidays only',
+        onPress: () => {
+          void runPhoneSync(false, true);
+        },
+      },
+      {
+        text: 'Both',
+        onPress: () => {
+          void runPhoneSync(true, true);
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
@@ -172,10 +268,26 @@ export default function CalendarScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.screenTitle} numberOfLines={1} allowFontScaling={false}>
-          Schedule
-        </Text>
-        <Text style={styles.screenSub}>Past and upcoming missions on the timeline.</Text>
+        <View style={styles.titleRow}>
+          <View style={styles.titleBody}>
+            <Text style={styles.screenTitle} numberOfLines={1} allowFontScaling={false}>
+              Schedule
+            </Text>
+            <Text style={styles.screenSub}>Past and upcoming missions on the timeline.</Text>
+          </View>
+          <Pressable
+            onPress={handlePhoneSync}
+            disabled={phoneSyncing}
+            style={({ pressed }) => [styles.syncBtn, pressed && styles.pressed]}
+            accessibilityLabel="Sync to phone calendar"
+          >
+            {phoneSyncing ? (
+              <ActivityIndicator size="small" color={colors.black} />
+            ) : (
+              <Ionicons name={Platform.OS === 'ios' ? 'calendar' : 'sync-outline'} size={18} color={colors.black} />
+            )}
+          </Pressable>
+        </View>
 
         {canViewTeam ? (
           <View style={styles.scopeRow}>
@@ -294,6 +406,7 @@ export default function CalendarScreen() {
               month={month}
               selectedDate={selectedDate}
               markersByDate={markersByDate}
+              holidaysByDate={holidaysByDate}
               onSelectDate={selectDate}
               onMonthChange={(y, m) => {
                 setYear(y);
@@ -302,6 +415,27 @@ export default function CalendarScreen() {
             />
           ) : null}
         </View>
+
+        {selectedHolidays.length > 0 ? (
+          <View style={styles.holidayBanner}>
+            <Ionicons name="flag-outline" size={16} color={colors.error} />
+            <View style={styles.holidayBannerBody}>
+              <Text style={styles.holidayBannerTitle}>عطلة رسمية · Public holiday</Text>
+              <Text style={styles.holidayBannerText}>{formatHolidayList(selectedHolidays)}</Text>
+              {selectedHolidays.some((h) => h.tentative) ? (
+                <Text style={styles.holidayBannerNote}>
+                  * التواريخ الإسلامية قد تتغيّر بعد تأكيد الحكومة · Islamic dates may shift when confirmed
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {!lebanonHolidayYearsAvailable().includes(year) ? (
+          <Text style={styles.holidayNote}>
+            Fixed holidays shown · العطل الثابتة معروضة. Update app for {year} lunar dates.
+          </Text>
+        ) : null}
 
         {scope === 'team' && !personFilter && dayJobs.length > 1 ? (
           <View style={styles.legend}>
@@ -430,8 +564,21 @@ function TeamPersonChip({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  titleBody: { flex: 1, gap: 2 },
+  syncBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    marginTop: 2,
+  },
   screenTitle: { ...typography.screenTitle, color: colors.black },
-  screenSub: { ...typography.caption, color: colors.grey600, marginTop: -spacing.sm },
+  screenSub: { ...typography.caption, color: colors.grey600 },
   scopeRow: { flexDirection: 'row', gap: spacing.sm },
   scopeChip: {
     flex: 1,
@@ -508,6 +655,21 @@ const styles = StyleSheet.create({
   calendarToggleBody: { flex: 1, minWidth: 0, gap: 2 },
   calendarToggleTitle: { ...typography.subheading, color: colors.black },
   calendarToggleSub: { ...typography.caption, color: colors.grey600 },
+  holidayBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.errorLight,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  holidayBannerBody: { flex: 1, gap: 2 },
+  holidayBannerTitle: { ...typography.caption, color: colors.error, fontWeight: '700' },
+  holidayBannerText: { ...typography.body, color: colors.black, fontSize: 14 },
+  holidayBannerNote: { ...typography.caption, color: colors.grey600, fontSize: 11 },
+  holidayNote: { ...typography.caption, color: colors.grey600, textAlign: 'center' },
   dayNavGroup: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   dayNavBtn: {
     width: 32,
