@@ -1,51 +1,46 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TeamMemberDetailSheet } from '../../components/TeamMemberDetailSheet';
 import {
   APP_DEV_POSITION,
-  compareRoleLevel,
   getRoleLabel,
-  type Position,
 } from '../../constants/positions';
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
-import { APP_DEV_LABEL, getEffectivePosition } from '../../lib/appwrite/auth';
-import { parseStoredContactList } from '../../lib/contactFields';
-import { getDescendantIds, getDirectReports, memberName } from '../../lib/orgHierarchy';
+import { getEffectivePosition } from '../../lib/appwrite/auth';
+import { parseStoredContactList, memberPrimaryEmail, memberPrimaryPhone } from '../../lib/contactFields';
+import {
+  buildOrgTree,
+  buildTeamTree,
+  countTreeNodes,
+  expandMembersForSearch,
+  flattenTree,
+  getDescendantIds,
+  getDirectReports,
+  getManagerChainMembers,
+  type TeamTreeNode,
+} from '../../lib/orgHierarchy';
 import { memberAccentColor } from '../../utils/teamColors';
 import type { OrgMember } from '../../types/org';
 
 type TeamScope = 'mine' | 'full';
 
-const ROLE_SECTIONS: Array<{ position: Position | typeof APP_DEV_POSITION | ''; title: string }> = [
-  { position: APP_DEV_POSITION, title: 'App developers' },
-  { position: 'Operations Manager', title: 'Operations managers' },
-  { position: 'Supervisor', title: 'Supervisors' },
-  { position: 'Technician', title: 'Technicians' },
-  { position: '', title: 'No role assigned' },
-];
-
-function sortMembers(members: OrgMember[]): OrgMember[] {
-  return [...members].sort((a, b) => {
-    const byRole = compareRoleLevel(b.position, a.position);
-    if (byRole !== 0) return byRole;
-    return a.name.localeCompare(b.name);
-  });
-}
-
 function memberMatchesQuery(member: OrgMember, q: string, teamMembers: OrgMember[]): boolean {
   if (!q) return true;
-  const manager = memberName(teamMembers, member.managerId);
+  const manager = teamMembers.find((m) => m.id === member.managerId)?.name ?? '';
   const hay = `${member.name} ${member.email} ${member.position} ${manager}`.toLowerCase();
   return hay.includes(q);
 }
@@ -58,6 +53,8 @@ function shortRole(position: string): string {
 }
 
 export default function TeamScreen() {
+  const { width: pageWidth } = useWindowDimensions();
+  const pagerRef = useRef<ScrollView>(null);
   const { user } = useAuth();
   const { teamMembers, refreshTeam } = useJobCards();
   const [scope, setScope] = useState<TeamScope>('mine');
@@ -90,31 +87,57 @@ export default function TeamScreen() {
   const myTeamReports = useMemo(() => {
     if (!user) return [];
     const ids = new Set(getDescendantIds(user.$id, teamMembers));
-    return sortMembers(teamMembers.filter((m) => ids.has(m.id)));
+    return teamMembers.filter((m) => ids.has(m.id));
   }, [user, teamMembers]);
 
   const myTeamCount = myTeamReports.length + (selfMember ? 1 : 0);
-  const fullTeam = useMemo(() => sortMembers(teamMembers), [teamMembers]);
-  const baseList = scope === 'mine' ? myTeamReports : fullTeam.filter((m) => m.id !== user?.$id);
+  const fullTeam = useMemo(() => teamMembers, [teamMembers]);
   const q = query.trim().toLowerCase();
 
-  const filtered = useMemo(() => {
-    if (!q) return baseList;
-    return baseList.filter((m) => memberMatchesQuery(m, q, teamMembers));
-  }, [baseList, q, teamMembers]);
+  const myLeadershipChain = useMemo(() => {
+    if (!selfMember) return [];
+    return getManagerChainMembers(selfMember.id, teamMembers);
+  }, [selfMember, teamMembers]);
 
-  const showSelf = useMemo(
-    () => Boolean(selfMember && memberMatchesQuery(selfMember, q, teamMembers)),
-    [selfMember, q, teamMembers],
-  );
+  const pageData = useMemo(() => {
+    const build = (pageScope: TeamScope) => {
+      const pool = pageScope === 'mine' ? myTeamReports : fullTeam;
+      const visible = expandMembersForSearch(pool, q, teamMembers, memberMatchesQuery);
+      const tree =
+        pageScope === 'mine' && user
+          ? buildTeamTree(user.$id, visible)
+          : buildOrgTree(visible);
+      const flat = flattenTree(tree);
+      const memberIds =
+        pageScope === 'mine' && selfMember
+          ? [selfMember.id, ...flat.map((m) => m.id)]
+          : flat.map((m) => m.id);
+      const emptyMine =
+        pageScope === 'mine' &&
+        myTeamReports.length === 0 &&
+        !(selfMember && memberMatchesQuery(selfMember, q, teamMembers));
+      const showMineLeadership =
+        pageScope === 'mine' && Boolean(myLeadershipChain.length > 0 || selfMember);
+      const emptySearch =
+        !emptyMine &&
+        countTreeNodes(tree) === 0 &&
+        !(pageScope === 'mine' && showMineLeadership);
 
-  const memberIds = useMemo(
-    () => (selfMember ? [selfMember.id, ...baseList.map((m) => m.id)] : baseList.map((m) => m.id)),
-    [selfMember, baseList],
-  );
+      return { tree, memberIds, emptyMine, emptySearch };
+    };
+
+    return { mine: build('mine'), full: build('full') };
+  }, [myTeamReports, fullTeam, user, q, teamMembers, selfMember, myLeadershipChain]);
+
+  const activeMemberIds = scope === 'mine' ? pageData.mine.memberIds : pageData.full.memberIds;
 
   const detailDirectReports = useMemo(
     () => (detailMember ? getDirectReports(detailMember.id, teamMembers) : []),
+    [detailMember, teamMembers],
+  );
+
+  const detailManagerChain = useMemo(
+    () => (detailMember ? getManagerChainMembers(detailMember.id, teamMembers) : []),
     [detailMember, teamMembers],
   );
 
@@ -129,16 +152,81 @@ export default function TeamScreen() {
 
   const openDetail = (member: OrgMember) => setDetailMember(member);
 
+  const goToScope = (next: TeamScope) => {
+    setScope(next);
+    pagerRef.current?.scrollTo({ x: next === 'mine' ? 0 : pageWidth, animated: true });
+  };
+
+  const onPagerScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+    setScope(index === 0 ? 'mine' : 'full');
+  };
+
+  const renderScopeContent = (pageScope: TeamScope) => {
+    const { tree, memberIds, emptyMine, emptySearch } = pageData[pageScope];
+
+    if (emptyMine) {
+      return (
+        <View style={styles.empty}>
+          <Ionicons name="people-outline" size={layout.iconLg} color={colors.grey400} />
+          <Text style={styles.emptyTitle}>No direct team yet</Text>
+          <Text style={styles.emptyText}>
+            People who report to you will appear here. Swipe left for Organization.
+          </Text>
+        </View>
+      );
+    }
+
+    if (emptySearch) {
+      return (
+        <View style={styles.empty}>
+          <Ionicons name="search-outline" size={layout.iconLg} color={colors.grey400} />
+          <Text style={styles.emptyTitle}>No matches</Text>
+          <Text style={styles.emptyText}>Try another name or role.</Text>
+        </View>
+      );
+    }
+
+    return (
+      <>
+        {pageScope === 'mine' && (myLeadershipChain.length > 0 || selfMember) ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Leadership chain</Text>
+            <View style={styles.listCard}>
+              <LeadershipChain
+                managers={myLeadershipChain}
+                member={selfMember}
+                accentColor={
+                  selfMember ? memberAccentColor(selfMember.id, memberIds) : colors.primary
+                }
+                onPressMember={openDetail}
+              />
+            </View>
+          </View>
+        ) : null}
+
+        {countTreeNodes(tree) > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>
+              {pageScope === 'mine' ? 'Your team' : 'Organization'}
+            </Text>
+            <View style={styles.listCard}>
+              <TeamTreeBranch
+                nodes={tree}
+                memberIds={memberIds}
+                selfId={user?.$id}
+                onPress={openDetail}
+              />
+            </View>
+          </View>
+        ) : null}
+      </>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-        }
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
+      <View style={styles.header}>
         <Text style={styles.screenTitle} numberOfLines={1} allowFontScaling={false}>
           Team
         </Text>
@@ -147,12 +235,12 @@ export default function TeamScreen() {
           <ScopeChip
             label={`My team · ${myTeamCount}`}
             active={scope === 'mine'}
-            onPress={() => setScope('mine')}
+            onPress={() => goToScope('mine')}
           />
           <ScopeChip
             label={`Organization · ${fullTeam.length}`}
             active={scope === 'full'}
-            onPress={() => setScope('full')}
+            onPress={() => goToScope('full')}
           />
         </View>
 
@@ -171,76 +259,43 @@ export default function TeamScreen() {
             </Pressable>
           ) : null}
         </View>
+      </View>
 
-        {scope === 'mine' && myTeamReports.length === 0 && !showSelf ? (
-          <View style={styles.empty}>
-            <Ionicons name="people-outline" size={layout.iconLg} color={colors.grey400} />
-            <Text style={styles.emptyTitle}>No direct team yet</Text>
-            <Text style={styles.emptyText}>
-              People who report to you will appear here. Switch to Organization to browse all staff.
-            </Text>
-          </View>
-        ) : !showSelf && filtered.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name="search-outline" size={layout.iconLg} color={colors.grey400} />
-            <Text style={styles.emptyTitle}>No matches</Text>
-            <Text style={styles.emptyText}>Try another name or role.</Text>
-          </View>
-        ) : (
-          <>
-            {showSelf && selfMember ? (
-              <View style={styles.section}>
-                <Text style={styles.sectionLabel}>You</Text>
-                <View style={styles.listCard}>
-                  <TeamMemberRow
-                    member={selfMember}
-                    accentColor={memberAccentColor(selfMember.id, memberIds)}
-                    isSelf
-                    onPress={() => openDetail(selfMember)}
-                  />
-                </View>
-              </View>
-            ) : null}
-
-            {ROLE_SECTIONS.map((section) => {
-              const sectionMembers = filtered.filter((m) => {
-                if (section.position === APP_DEV_POSITION) {
-                  return m.position === APP_DEV_POSITION || m.labels.includes(APP_DEV_LABEL);
-                }
-                if (section.position) return m.position === section.position;
-                return !m.position && !m.labels.includes(APP_DEV_LABEL);
-              });
-              if (!sectionMembers.length) return null;
-
-              return (
-                <View key={section.title} style={styles.section}>
-                  <Text style={styles.sectionLabel}>{section.title}</Text>
-                  <View style={styles.listCard}>
-                    {sectionMembers.map((member, index) => (
-                      <TeamMemberRow
-                        key={member.id}
-                        member={member}
-                        accentColor={memberAccentColor(member.id, memberIds)}
-                        isSelf={member.id === user?.$id}
-                        onPress={() => openDetail(member)}
-                        isLast={index === sectionMembers.length - 1}
-                      />
-                    ))}
-                  </View>
-                </View>
-              );
-            })}
-          </>
-        )}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={onPagerScrollEnd}
+        scrollEventThrottle={16}
+        style={styles.pager}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
+        {(['mine', 'full'] as TeamScope[]).map((pageScope) => (
+          <ScrollView
+            key={pageScope}
+            style={{ width: pageWidth }}
+            contentContainerStyle={styles.pageContent}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            }
+          >
+            {renderScopeContent(pageScope)}
+          </ScrollView>
+        ))}
       </ScrollView>
 
       <TeamMemberDetailSheet
         visible={!!detailMember}
         member={detailMember}
-        managerLabel={detailMember ? memberName(teamMembers, detailMember.managerId) : ''}
+        managerChain={detailManagerChain}
         directReports={detailDirectReports}
         accentColor={
-          detailMember ? memberAccentColor(detailMember.id, memberIds) : colors.primary
+          detailMember ? memberAccentColor(detailMember.id, activeMemberIds) : colors.primary
         }
         isSelf={detailMember?.id === user?.$id}
         onClose={() => setDetailMember(null)}
@@ -268,24 +323,141 @@ function ScopeChip({
   );
 }
 
+function LeadershipChain({
+  managers,
+  member,
+  accentColor,
+  onPressMember,
+}: {
+  managers: OrgMember[];
+  member: OrgMember | null;
+  accentColor: string;
+  onPressMember: (member: OrgMember) => void;
+}) {
+  const topDown = [...managers].reverse();
+  const chain = member ? [...topDown, member] : topDown;
+  if (!chain.length) return null;
+
+  return (
+    <View style={styles.chainWrap}>
+      {chain.map((link, index) => {
+        const isSelf = member?.id === link.id;
+        return (
+          <View key={link.id}>
+            {index > 0 ? (
+              <View style={styles.chainConnector}>
+                <View style={styles.chainLine} />
+                <Ionicons name="arrow-down" size={12} color={colors.grey400} />
+                <View style={styles.chainLine} />
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => onPressMember(link)}
+              style={({ pressed }) => [styles.chainRow, pressed && styles.pressed]}
+            >
+              <View
+                style={[
+                  styles.dot,
+                  { backgroundColor: isSelf ? accentColor : memberAccentColor(link.id, chain.map((m) => m.id)) },
+                ]}
+              />
+              <View style={styles.rowBody}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.name} numberOfLines={1}>
+                    {link.name || link.email}
+                  </Text>
+                  {isSelf ? (
+                    <View style={styles.youBadge}>
+                      <Text style={styles.youBadgeText}>You</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.role} numberOfLines={1}>
+                  {shortRole(link.position)}
+                  {getRoleLabel(link.position) ? ` · ${getRoleLabel(link.position)}` : ''}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.grey400} />
+            </Pressable>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function TeamTreeBranch({
+  nodes,
+  memberIds,
+  selfId,
+  onPress,
+  depth = 0,
+  isLastGroup = true,
+}: {
+  nodes: TeamTreeNode[];
+  memberIds: string[];
+  selfId?: string;
+  onPress: (member: OrgMember) => void;
+  depth?: number;
+  isLastGroup?: boolean;
+}) {
+  return (
+    <>
+      {nodes.map((node, index) => {
+        const isLast = isLastGroup && index === nodes.length - 1;
+        const hasChildren = node.children.length > 0;
+
+        return (
+          <View key={node.member.id}>
+            <TeamMemberRow
+              member={node.member}
+              accentColor={memberAccentColor(node.member.id, memberIds)}
+              isSelf={node.member.id === selfId}
+              onPress={() => onPress(node.member)}
+              isLast={isLast && !hasChildren}
+              indent={depth}
+            />
+            {hasChildren ? (
+              <View style={styles.treeChildren}>
+                <TeamTreeBranch
+                  nodes={node.children}
+                  memberIds={memberIds}
+                  selfId={selfId}
+                  onPress={onPress}
+                  depth={depth + 1}
+                />
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
+    </>
+  );
+}
+
 function TeamMemberRow({
   member,
   accentColor,
   isSelf,
   onPress,
   isLast = true,
+  indent = 0,
 }: {
   member: OrgMember;
   accentColor: string;
   isSelf: boolean;
   onPress: () => void;
   isLast?: boolean;
+  indent?: number;
 }) {
+  const contactHint = memberPrimaryPhone(member) ?? memberPrimaryEmail(member);
+
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
+        { paddingLeft: spacing.md + indent * 20 },
         !isLast && styles.rowBorder,
         pressed && styles.pressed,
       ]}
@@ -304,7 +476,13 @@ function TeamMemberRow({
         </View>
         <Text style={styles.role} numberOfLines={1}>
           {shortRole(member.position)}
+          {getRoleLabel(member.position) ? ` · ${getRoleLabel(member.position)}` : ''}
         </Text>
+        {contactHint ? (
+          <Text style={styles.contactHint} numberOfLines={1}>
+            {contactHint}
+          </Text>
+        ) : null}
       </View>
       <Ionicons name="chevron-forward" size={16} color={colors.grey400} />
     </Pressable>
@@ -313,7 +491,18 @@ function TeamMemberRow({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
+  header: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    gap: spacing.md,
+  },
+  pager: { flex: 1 },
+  pageContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
+  },
   screenTitle: { ...typography.screenTitle, color: colors.black },
   scopeRow: { flexDirection: 'row', gap: spacing.sm },
   scopeChip: {
@@ -372,6 +561,27 @@ const styles = StyleSheet.create({
   },
   youBadgeText: { fontSize: 8, fontWeight: '700', color: colors.black },
   role: { ...typography.caption, color: colors.grey600, fontSize: 12 },
+  contactHint: { ...typography.caption, color: colors.info, fontSize: 11, marginTop: 1 },
+  treeChildren: {
+    marginLeft: 26,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.grey200,
+  },
+  chainWrap: { paddingVertical: spacing.xs },
+  chainConnector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    gap: spacing.xs,
+  },
+  chainLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.grey200 },
+  chainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
   empty: {
     alignItems: 'center',
     gap: spacing.sm,

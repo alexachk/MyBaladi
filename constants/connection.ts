@@ -8,7 +8,3 @@ export function homeConnectionLabel(input: {
   if (input.usingCache) return 'Cached · offline';
   return 'Online';
 }
-
-export function settingsConnectionDescription(isConfigured: boolean): string {
-  return isConfigured ? 'Online · Frankfurt' : 'Not connected';
-}

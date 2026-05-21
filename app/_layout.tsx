@@ -67,13 +67,7 @@ function RootNavigator() {
         <Stack.Screen name="job/sign/[id]" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen name="clients" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="notifications"
-          options={{
-            title: 'Notifications',
-            headerBackTitle: 'Back',
-          }}
-        />
+        <Stack.Screen name="notifications" options={{ headerShown: false }} />
       </Stack>
     </>
   );

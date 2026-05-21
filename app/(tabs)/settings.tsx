@@ -19,17 +19,15 @@ import { getRoleDescription, getRoleLabel } from '../../constants/positions';
 import { colors, layout, radius, shadow, spacing, typography } from '../../constants/theme';
 import { useAuth } from '../../context/JobCardsContext';
 import { getEffectivePosition, isAppDevUser } from '../../lib/appwrite/auth';
-import { appwriteConfig } from '../../lib/appwrite/config';
 import {
   clearCredentials,
   getBiometricCapability,
   hasSavedCredentials,
   type BiometricCapability,
 } from '../../lib/biometric';
-import { settingsConnectionDescription } from '../../constants/connection';
 
 export default function SettingsScreen() {
-  const { user, logout, isConfigured, isAdmin } = useAuth();
+  const { user, logout, isAdmin } = useAuth();
   const showAppDevBadge = isAppDevUser(user);
   const userPosition = getEffectivePosition(user);
   const [bio, setBio] = useState<BiometricCapability>({
@@ -150,29 +148,6 @@ export default function SettingsScreen() {
             description="Clear session on this device"
             onPress={handleSignOut}
             destructive
-          />
-        </Section>
-
-        <Section title="Backend">
-          <Row
-            icon="cloud-outline"
-            label="Connection"
-            description={settingsConnectionDescription(isConfigured)}
-            right={
-              <View style={[styles.statusDot, { backgroundColor: isConfigured ? colors.success : colors.grey400 }]} />
-            }
-          />
-          <Divider />
-          <Row
-            icon="key-outline"
-            label="Project"
-            description={appwriteConfig.projectId}
-          />
-          <Divider />
-          <Row
-            icon="server-outline"
-            label="Database"
-            description={appwriteConfig.databaseId || '—'}
           />
         </Section>
 
@@ -324,7 +299,6 @@ const styles = StyleSheet.create({
   rowLabelDestructive: { color: colors.error },
   rowDescription: { ...typography.caption, color: colors.grey600 },
   divider: { height: 1, backgroundColor: colors.grey100, marginLeft: spacing.md + 32 + spacing.md },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
   pressed: { opacity: 0.7 },
   credit: {
     ...typography.caption,

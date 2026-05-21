@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { PanResponder, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 
 type Edge = 'left' | 'right';
@@ -22,7 +22,6 @@ export function EdgeSwipeOpener({
   style,
 }: Props) {
   const { width: screenWidth } = useWindowDimensions();
-  const fired = useRef(false);
 
   const responder = useMemo(
     () =>
@@ -34,26 +33,21 @@ export function EdgeSwipeOpener({
         },
         onMoveShouldSetPanResponder: (evt, gesture) => {
           const x = evt.nativeEvent.pageX;
-          const horizontal = Math.abs(gesture.dx) > Math.abs(gesture.dy);
+          const horizontal = Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2;
           if (edge === 'left') {
-            return x <= edgeWidth && horizontal && gesture.dx > 8;
+            return x <= edgeWidth + 12 && horizontal && gesture.dx > 8;
           }
-          return x >= screenWidth - edgeWidth && horizontal && gesture.dx < -8;
+          return x >= screenWidth - edgeWidth - 12 && horizontal && gesture.dx < -8;
         },
-        onPanResponderGrant: () => {
-          fired.current = false;
-        },
-        onPanResponderMove: (_, gesture) => {
+        onPanResponderRelease: (_, gesture) => {
+          const horizontal = Math.abs(gesture.dx) > Math.abs(gesture.dy);
           const passed =
             edge === 'left'
-              ? gesture.dx > triggerDistance
-              : gesture.dx < -triggerDistance;
-          if (!fired.current && passed) {
-            fired.current = true;
-            onOpen();
-          }
+              ? horizontal && gesture.dx > triggerDistance
+              : horizontal && gesture.dx < -triggerDistance;
+          if (passed) onOpen();
         },
-        onPanResponderTerminationRequest: () => false,
+        onPanResponderTerminationRequest: () => true,
       }),
     [edge, edgeWidth, triggerDistance, onOpen, screenWidth],
   );

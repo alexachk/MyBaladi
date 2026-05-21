@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BaladiLogo } from '../../components/BaladiLogo';
 import { ClientsSidebar } from '../../components/ClientsSidebar';
+import { NotificationsPanel } from '../../components/NotificationsPanel';
 import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
 import { JobCardItem } from '../../components/JobCardItem';
 import { PrimaryButton } from '../../components/PrimaryButton';
@@ -46,6 +47,7 @@ export default function JobsScreen() {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -104,7 +106,7 @@ export default function JobsScreen() {
         <BaladiLogo variant="compact" size={layout.logoCompact} />
         <View style={styles.topBarRight}>
           <Pressable
-            onPress={() => router.push('/notifications')}
+            onPress={() => setNotificationsOpen(true)}
             accessibilityLabel="Open notifications"
             style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
           >
@@ -246,8 +248,9 @@ export default function JobsScreen() {
       />
 
       <EdgeSwipeOpener edge="left" onOpen={() => setSidebarOpen(true)} />
-      <EdgeSwipeOpener edge="right" onOpen={() => router.push('/notifications')} />
+      <EdgeSwipeOpener edge="right" onOpen={() => setNotificationsOpen(true)} />
       <ClientsSidebar visible={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <NotificationsPanel visible={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
     </SafeAreaView>
   );
 }

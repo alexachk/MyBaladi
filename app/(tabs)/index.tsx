@@ -1,9 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BaladiLogo } from '../../components/BaladiLogo';
 import { EdgeSwipeOpener } from '../../components/EdgeSwipeOpener';
+import { NotificationsPanel } from '../../components/NotificationsPanel';
 import { JobCardItem } from '../../components/JobCardItem';
 import { MachineryBackground } from '../../components/MachineryBackground';
 import { StatCard } from '../../components/PrimaryButton';
@@ -15,8 +25,10 @@ import { todayIsoDate } from '../../utils/formatDate';
 
 export default function HomeScreen() {
   const { user, logout, isConfigured } = useAuth();
-  const { jobCards, loading, syncing, isRemote, usingCache } = useJobCards();
-  const { unread } = useNotifications();
+  const { jobCards, loading, syncing, isRemote, usingCache, refresh } = useJobCards();
+  const { unread, refresh: refreshNotifications } = useNotifications();
+  const [refreshing, setRefreshing] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const today = todayIsoDate();
 
   const activeCount = jobCards.filter(
@@ -31,15 +43,34 @@ export default function HomeScreen() {
   const greeting = getGreeting();
   const displayName = user?.name?.split(' ')[0] ?? 'there';
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refresh(), refreshNotifications()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <MachineryBackground opacity={0.14} position="bottom" />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing || syncing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <View style={styles.topBar}>
           <BaladiLogo variant="compact" size={layout.logoCompact} />
           <View style={styles.topBarActions}>
             <Pressable
-              onPress={() => router.push('/notifications')}
+              onPress={() => setNotificationsOpen(true)}
               style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
               hitSlop={8}
               accessibilityLabel="Open notifications"
@@ -153,7 +184,8 @@ export default function HomeScreen() {
           </>
         )}
       </ScrollView>
-      <EdgeSwipeOpener edge="right" onOpen={() => router.push('/notifications')} />
+      <EdgeSwipeOpener edge="right" onOpen={() => setNotificationsOpen(true)} />
+      <NotificationsPanel visible={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
     </SafeAreaView>
   );
 }

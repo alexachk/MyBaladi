@@ -1,9 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View, Linking } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { APP_DEV_POSITION, getRoleDescription, getRoleLabel } from '../constants/positions';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import { APP_DEV_LABEL } from '../lib/appwrite/auth';
+import {
+  memberContactEmails,
+  memberContactPhones,
+  memberPrimaryEmail,
+  memberPrimaryPhone,
+} from '../lib/contactFields';
 import type { OrgMember } from '../types/org';
 
 function roleIcon(position: string): keyof typeof Ionicons.glyphMap {
@@ -17,7 +24,7 @@ function roleIcon(position: string): keyof typeof Ionicons.glyphMap {
 interface TeamMemberDetailSheetProps {
   visible: boolean;
   member: OrgMember | null;
-  managerLabel: string;
+  managerChain: OrgMember[];
   directReports: OrgMember[];
   accentColor: string;
   isSelf: boolean;
@@ -27,25 +34,66 @@ interface TeamMemberDetailSheetProps {
 export function TeamMemberDetailSheet({
   visible,
   member,
-  managerLabel,
+  managerChain,
   directReports,
   accentColor,
   isSelf,
   onClose,
 }: TeamMemberDetailSheetProps) {
   const insets = useSafeAreaInsets();
+  const slideY = useRef(new Animated.Value(480)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    slideY.setValue(480);
+    Animated.spring(slideY, {
+      toValue: 0,
+      useNativeDriver: true,
+      damping: 22,
+      stiffness: 220,
+    }).start();
+  }, [visible, slideY]);
+
   if (!member) return null;
 
   const isAppDev = member.labels.includes(APP_DEV_LABEL);
   const roleLine = member.position
     ? `${member.position}${getRoleLabel(member.position) ? ` · ${getRoleLabel(member.position)}` : ''}`
     : 'No role assigned';
+  const phones = memberContactPhones(member);
+  const emails = memberContactEmails(member);
+  const primaryPhone = memberPrimaryPhone(member);
+  const primaryEmail = memberPrimaryEmail(member);
+  const hasContact = phones.length > 0 || emails.length > 0;
+
+  const openPhone = (value: string) => {
+    Linking.openURL(`tel:${value}`).catch(() => {
+      Alert.alert('Call', 'Unable to open the phone app.');
+    });
+  };
+
+  const openEmail = (value: string) => {
+    Linking.openURL(`mailto:${value}`).catch(() => {
+      Alert.alert('Email', 'Unable to open the mail app.');
+    });
+  };
+
+  const openSms = (value: string) => {
+    Linking.openURL(`sms:${value}`).catch(() => {
+      Alert.alert('Message', 'Unable to open the messaging app.');
+    });
+  };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.md }]}>
+        <Animated.View
+          style={[
+            styles.sheet,
+            { paddingBottom: insets.bottom + spacing.md, transform: [{ translateY: slideY }] },
+          ]}
+        >
           <View style={styles.handle} />
           <View style={styles.header}>
             <View style={[styles.avatar, { backgroundColor: accentColor }]}>
@@ -57,8 +105,8 @@ export function TeamMemberDetailSheet({
               <Text style={styles.title} numberOfLines={1}>
                 {member.name || member.email}
               </Text>
-              <Text style={styles.email} numberOfLines={1}>
-                {member.email}
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {shortRoleLine(member.position)}
               </Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10}>
@@ -72,6 +120,65 @@ export function TeamMemberDetailSheet({
               {isAppDev ? <Tag label="App Dev" tint={colors.infoLight} /> : null}
             </View>
 
+            {hasContact ? (
+              <View style={styles.contactSection}>
+                <View style={styles.actionRow}>
+                  {primaryPhone ? (
+                    <Pressable
+                      onPress={() => openPhone(primaryPhone)}
+                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+                    >
+                      <Ionicons name="call-outline" size={16} color={colors.black} />
+                      <Text style={styles.actionText}>Call</Text>
+                    </Pressable>
+                  ) : null}
+                  {primaryEmail ? (
+                    <Pressable
+                      onPress={() => openEmail(primaryEmail)}
+                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+                    >
+                      <Ionicons name="mail-outline" size={16} color={colors.black} />
+                      <Text style={styles.actionText}>Email</Text>
+                    </Pressable>
+                  ) : null}
+                  {primaryPhone ? (
+                    <Pressable
+                      onPress={() => openSms(primaryPhone)}
+                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+                    >
+                      <Ionicons name="chatbubble-outline" size={16} color={colors.black} />
+                      <Text style={styles.actionText}>Text</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                <View style={styles.contactCard}>
+                  {phones.map((phone) => (
+                    <ContactRow
+                      key={`phone-${phone}`}
+                      icon="call-outline"
+                      label="Phone"
+                      value={phone}
+                      onPress={() => openPhone(phone)}
+                    />
+                  ))}
+                  {emails.map((email) => (
+                    <ContactRow
+                      key={`email-${email}`}
+                      icon="mail-outline"
+                      label="Email"
+                      value={email}
+                      onPress={() => openEmail(email)}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.block}>
+                <Text style={styles.blockHint}>No contact details on file.</Text>
+              </View>
+            )}
+
             <DetailBlock
               icon={roleIcon(member.position)}
               label="Role"
@@ -80,30 +187,44 @@ export function TeamMemberDetailSheet({
               accent={accentColor}
             />
 
-            {managerLabel ? (
-              <DetailBlock icon="person-outline" label="Reports to" value={managerLabel} />
+            {managerChain.length > 0 ? (
+              <View style={styles.block}>
+                <View style={styles.blockHead}>
+                  <Ionicons name="git-network-outline" size={16} color={colors.grey600} />
+                  <Text style={styles.blockLabel}>Reporting line</Text>
+                </View>
+                <View style={styles.chainList}>
+                  {[...managerChain].reverse().map((manager, index) => (
+                    <View key={manager.id}>
+                      {index > 0 ? (
+                        <View style={styles.chainStep}>
+                          <Ionicons name="arrow-down" size={12} color={colors.grey400} />
+                        </View>
+                      ) : null}
+                      <Text style={styles.chainItem} numberOfLines={2}>
+                        {manager.name || manager.email}
+                        {manager.position
+                          ? ` · ${manager.position}${getRoleLabel(manager.position) ? ` (${getRoleLabel(manager.position)})` : ''}`
+                          : ''}
+                      </Text>
+                    </View>
+                  ))}
+                  <View style={styles.chainStep}>
+                    <Ionicons name="arrow-down" size={12} color={colors.grey400} />
+                  </View>
+                  <Text style={[styles.chainItem, styles.chainItemSelf]} numberOfLines={2}>
+                    {member.name || member.email}
+                    {member.position
+                      ? ` · ${member.position}${getRoleLabel(member.position) ? ` (${getRoleLabel(member.position)})` : ''}`
+                      : ''}
+                    {isSelf ? ' · You' : ''}
+                  </Text>
+                </View>
+              </View>
             ) : member.position &&
               member.position !== 'Operations Manager' &&
               member.position !== APP_DEV_POSITION ? (
               <DetailBlock icon="person-outline" label="Reports to" value="No manager assigned" />
-            ) : null}
-
-            {member.contactPhones.length > 0 ? (
-              <ContactListBlock
-                icon="call-outline"
-                label="Phone"
-                values={member.contactPhones}
-                onPress={(value) => Linking.openURL(`tel:${value}`)}
-              />
-            ) : null}
-
-            {member.contactEmails.length > 0 ? (
-              <ContactListBlock
-                icon="mail-outline"
-                label="Email"
-                values={member.contactEmails}
-                onPress={(value) => Linking.openURL(`mailto:${value}`)}
-              />
             ) : null}
 
             {directReports.length > 0 ? (
@@ -125,10 +246,16 @@ export function TeamMemberDetailSheet({
               </View>
             ) : null}
           </ScrollView>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
+}
+
+function shortRoleLine(position: string): string {
+  if (!position) return 'No role assigned';
+  const label = getRoleLabel(position);
+  return label ? `${position} · ${label}` : position;
 }
 
 function Tag({ label, tint }: { label: string; tint: string }) {
@@ -139,31 +266,28 @@ function Tag({ label, tint }: { label: string; tint: string }) {
   );
 }
 
-function ContactListBlock({
+function ContactRow({
   icon,
   label,
-  values,
+  value,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  values: string[];
-  onPress: (value: string) => void;
+  value: string;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.block}>
-      <View style={styles.blockHead}>
-        <Ionicons name={icon} size={16} color={colors.grey600} />
-        <Text style={styles.blockLabel}>{label}</Text>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.contactRow, pressed && styles.pressed]}>
+      <View style={styles.contactIcon}>
+        <Ionicons name={icon} size={16} color={colors.black} />
       </View>
-      <View style={styles.contactList}>
-        {values.map((value) => (
-          <Pressable key={`${label}-${value}`} onPress={() => onPress(value)}>
-            <Text style={styles.contactLink}>{value}</Text>
-          </Pressable>
-        ))}
+      <View style={styles.contactBody}>
+        <Text style={styles.contactLabel}>{label}</Text>
+        <Text style={styles.contactValue}>{value}</Text>
       </View>
-    </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.grey400} />
+    </Pressable>
   );
 }
 
@@ -199,7 +323,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: '78%',
+    maxHeight: '82%',
     paddingTop: spacing.sm,
     paddingHorizontal: spacing.lg,
   },
@@ -222,7 +346,7 @@ const styles = StyleSheet.create({
   avatarText: { ...typography.subheading, color: colors.white, fontSize: 18 },
   headerBody: { flex: 1, minWidth: 0, gap: 2 },
   title: { ...typography.subheading, color: colors.black },
-  email: { ...typography.caption, color: colors.grey600 },
+  subtitle: { ...typography.caption, color: colors.grey600 },
   body: { gap: spacing.md, paddingBottom: spacing.lg },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   tag: {
@@ -231,6 +355,44 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
   },
   tagText: { fontSize: 10, fontWeight: '700', color: colors.black },
+  contactSection: { gap: spacing.sm },
+  actionRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: colors.grey100,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  actionText: { ...typography.caption, color: colors.black, fontWeight: '600' },
+  contactCard: {
+    backgroundColor: colors.grey100,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.grey200,
+  },
+  contactIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactBody: { flex: 1, gap: 2 },
+  contactLabel: { ...typography.label, color: colors.grey600 },
+  contactValue: { ...typography.body, color: colors.black, fontWeight: '600' },
   block: {
     backgroundColor: colors.grey100,
     borderRadius: radius.md,
@@ -241,8 +403,11 @@ const styles = StyleSheet.create({
   blockLabel: { ...typography.label, color: colors.grey600 },
   blockValue: { ...typography.body, color: colors.black, fontWeight: '600' },
   blockHint: { ...typography.caption, color: colors.grey600 },
-  contactList: { gap: 6, marginTop: spacing.xs },
-  contactLink: { ...typography.body, color: colors.primary, fontWeight: '600' },
   reportList: { gap: 4, marginTop: spacing.xs },
   reportItem: { ...typography.caption, color: colors.black },
+  chainList: { gap: 2, marginTop: spacing.xs },
+  chainStep: { alignItems: 'center', paddingVertical: 2 },
+  chainItem: { ...typography.caption, color: colors.black, fontWeight: '600' },
+  chainItemSelf: { color: colors.grey600, fontWeight: '700' },
+  pressed: { opacity: 0.7 },
 });
