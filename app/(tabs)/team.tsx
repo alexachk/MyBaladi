@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import {
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -21,7 +22,7 @@ import {
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { getEffectivePosition } from '../../lib/appwrite/auth';
-import { parseStoredContactList, memberPrimaryEmail, memberPrimaryPhone } from '../../lib/contactFields';
+import { parseStoredContactList } from '../../lib/contactFields';
 import {
   buildOrgTree,
   buildTeamTree,
@@ -252,6 +253,7 @@ export default function TeamScreen() {
             placeholder="Search name, role, manager…"
             placeholderTextColor={colors.grey400}
             style={styles.searchInput}
+            textAlignVertical="center"
           />
           {query ? (
             <Pressable onPress={() => setQuery('')} hitSlop={10}>
@@ -281,7 +283,9 @@ export default function TeamScreen() {
             nestedScrollEnabled
             keyboardShouldPersistTaps="handled"
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+              pageScope === scope ? (
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+              ) : undefined
             }
           >
             {renderScopeContent(pageScope)}
@@ -450,8 +454,6 @@ function TeamMemberRow({
   isLast?: boolean;
   indent?: number;
 }) {
-  const contactHint = memberPrimaryPhone(member) ?? memberPrimaryEmail(member);
-
   return (
     <Pressable
       onPress={onPress}
@@ -478,11 +480,6 @@ function TeamMemberRow({
           {shortRole(member.position)}
           {getRoleLabel(member.position) ? ` · ${getRoleLabel(member.position)}` : ''}
         </Text>
-        {contactHint ? (
-          <Text style={styles.contactHint} numberOfLines={1}>
-            {contactHint}
-          </Text>
-        ) : null}
       </View>
       <Ionicons name="chevron-forward" size={16} color={colors.grey400} />
     </Pressable>
@@ -522,13 +519,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: 10,
+    minHeight: 44,
     backgroundColor: colors.white,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.grey200,
   },
-  searchInput: { flex: 1, ...typography.body, color: colors.black, padding: 0 },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.black,
+    padding: 0,
+    paddingVertical: 10,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+  },
   section: { gap: spacing.xs },
   sectionLabel: { ...typography.label, color: colors.grey600, marginLeft: spacing.xs },
   listCard: {
@@ -561,7 +565,6 @@ const styles = StyleSheet.create({
   },
   youBadgeText: { fontSize: 8, fontWeight: '700', color: colors.black },
   role: { ...typography.caption, color: colors.grey600, fontSize: 12 },
-  contactHint: { ...typography.caption, color: colors.info, fontSize: 11, marginTop: 1 },
   treeChildren: {
     marginLeft: 26,
     borderLeftWidth: 2,

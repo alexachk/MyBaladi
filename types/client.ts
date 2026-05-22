@@ -1,3 +1,7 @@
+import type { StoredAddress } from '../lib/clientAddresses';
+import type { StoredEmail, StoredPhone } from '../lib/clientContact';
+import type { StoredWebsite } from '../lib/clientWebsites';
+
 export type ClientType = 'person' | 'company';
 
 export interface Person {
@@ -7,7 +11,10 @@ export interface Person {
   fullName: string;
   email: string;
   phone: string;
+  contactPhones: StoredPhone[];
+  contactEmails: StoredEmail[];
   address: string;
+  contactAddresses: StoredAddress[];
   notes: string;
   companyId: string;
   createdBy: string;
@@ -21,9 +28,13 @@ export interface Company {
   legalName: string;
   email: string;
   phone: string;
+  contactPhones: StoredPhone[];
+  contactEmails: StoredEmail[];
   address: string;
+  contactAddresses: StoredAddress[];
   industry: string;
   website: string;
+  contactWebsites: StoredWebsite[];
   notes: string;
   primaryContactId: string;
   createdBy: string;

@@ -11,6 +11,7 @@ All Appwrite-side schema and infrastructure changes must go through the admin AP
 - Schema definition: `scripts/appwrite/schema.mjs`
 - Sync to remote: `npm run appwrite:sync`
 - Check remote state: `npm run appwrite:status`
+- Seed sample clients: `npm run appwrite:seed-clients`
 
 Requires `APPWRITE_API_KEY` in `.env` (server-only, never commit).
 

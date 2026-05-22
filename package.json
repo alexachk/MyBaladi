@@ -17,6 +17,7 @@
     "appwrite:unset-app-dev": "node --env-file=.env scripts/appwrite/cli.mjs unset-app-dev",
     "appwrite:list-app-devs": "node --env-file=.env scripts/appwrite/cli.mjs list-app-devs",
     "appwrite:create-test-accounts": "node --env-file=.env scripts/appwrite/create-test-accounts.mjs",
+    "appwrite:seed-clients": "node --env-file=.env scripts/appwrite/seed-clients.mjs",
     "update:preview": "eas update --channel preview",
     "update:production": "eas update --channel production"
   },

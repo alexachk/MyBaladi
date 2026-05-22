@@ -24,7 +24,7 @@ import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { listPersonnel, type Personnel } from '../../lib/appwrite/adminUsers';
 import { createCalendarEvent } from '../../lib/calendar';
-import { openMapsForAddress } from '../../lib/maps';
+import { promptMapsForAddress } from '../../lib/maps';
 import { scheduleJobReminder } from '../../lib/notifications';
 import {
   JOB_PRIORITY_LABELS,
@@ -194,7 +194,7 @@ export default function NewJobCardScreen() {
   };
 
   const openInMaps = () => {
-    openMapsForAddress(siteAddress).catch(() => undefined);
+    promptMapsForAddress(siteAddress);
   };
 
   const [deviceContacts, setDeviceContacts] = useState<Contacts.ExistingContact[]>([]);

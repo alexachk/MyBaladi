@@ -18,6 +18,8 @@ interface NotificationsPanelProps {
   onClose: () => void;
 }
 
+const SWIPE_EDGE_WIDTH = 28;
+
 export function NotificationsPanel({ visible, onClose }: NotificationsPanelProps) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -54,9 +56,10 @@ export function NotificationsPanel({ visible, onClose }: NotificationsPanelProps
   const panResponder = useMemo(
     () =>
       PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_, gesture) => {
-          const horizontal = Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2;
-          return horizontal && gesture.dx > 8;
+          const horizontal = Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.1;
+          return horizontal && gesture.dx > 4;
         },
         onPanResponderGrant: () => {
           slideX.stopAnimation();
@@ -77,7 +80,7 @@ export function NotificationsPanel({ visible, onClose }: NotificationsPanelProps
             stiffness: 240,
           }).start();
         },
-        onPanResponderTerminationRequest: () => true,
+        onPanResponderTerminationRequest: () => false,
       }),
     [handleClose, panelWidth, slideX],
   );
@@ -87,7 +90,6 @@ export function NotificationsPanel({ visible, onClose }: NotificationsPanelProps
       <View style={styles.root}>
         <Pressable style={styles.backdrop} onPress={handleClose} />
         <Animated.View
-          {...panResponder.panHandlers}
           style={[
             styles.panel,
             {
@@ -98,7 +100,10 @@ export function NotificationsPanel({ visible, onClose }: NotificationsPanelProps
             },
           ]}
         >
-          <View style={styles.dragEdge} />
+          <View
+            style={[styles.dragEdge, { width: SWIPE_EDGE_WIDTH }]}
+            {...panResponder.panHandlers}
+          />
           <NotificationsHeader
             onClose={handleClose}
             unread={unread}
@@ -128,8 +133,7 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    width: 16,
-    zIndex: 2,
+    zIndex: 10,
   },
   content: { flex: 1 },
 });

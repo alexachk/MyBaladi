@@ -302,6 +302,13 @@ export function formatHolidayPhoneTitle(holiday: LebanonHoliday): string {
   return `${holiday.nameAr} · ${holiday.name}${star} (Lebanon)`;
 }
 
+/** Shown wherever holiday dates are displayed in the app. */
+export const HOLIDAY_DATE_DISCLAIMER =
+  'Dates shown are for reference only. Please confirm official company holidays with your employer.';
+
+export const HOLIDAY_TENTATIVE_NOTE =
+  '* Subject to change before official confirmation.';
+
 export function lebanonHolidayYearsAvailable(): number[] {
   return Object.keys(YEAR_ENTRIES)
     .map(Number)

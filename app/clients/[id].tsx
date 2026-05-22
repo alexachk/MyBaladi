@@ -1,10 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -13,12 +12,51 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { FormField } from '../../components/FormField';
+import { FormField, FormSection } from '../../components/FormField';
+import { ContactAddressesField } from '../../components/ContactAddressesField';
+import { ContactEmailsField } from '../../components/ContactEmailsField';
+import { ContactPhonesField } from '../../components/ContactPhonesField';
+import { ContactWebsitesField } from '../../components/ContactWebsitesField';
+import { IndustryPickerField } from '../../components/IndustryPickerField';
 import { PickerSheet } from '../../components/PickerSheet';
 import { PrimaryButton } from '../../components/PrimaryButton';
+import { StackPageHeader } from '../../components/StackPageHeader';
 import { colors, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { useClients } from '../../context/ClientsContext';
+import { promptEmailActions, openWebsite, promptPhoneActions } from '../../lib/contactActions';
+import {
+  addressEntriesForForm,
+  formatAddressLine,
+  hasMapPin,
+  prepareClientAddressesPayload,
+  type AddressEntry,
+} from '../../lib/clientAddresses';
+import {
+  clientPrimaryEmail,
+  clientPrimaryPhone,
+  emailEntriesForForm,
+  formatPhoneDisplay,
+  formatPhoneE164,
+  phoneEntriesForForm,
+  prepareClientContactPayload,
+  emailEntryErrors,
+  type EmailEntry,
+  type PhoneEntry,
+} from '../../lib/clientContact';
+import { promptMapsForAddressEntry } from '../../lib/maps';
+import { clientFormErrorScrollKeys, useFormScrollToError } from '../../lib/formScroll';
+import {
+  prepareClientWebsitesPayload,
+  websiteEntriesForForm,
+  type WebsiteEntry,
+} from '../../lib/clientWebsites';
+
+type ClientEditErrors = {
+  firstName?: string;
+  name?: string;
+  emails?: Record<string, string>;
+};
 
 export default function ClientDetailScreen() {
   const { id, type } = useLocalSearchParams<{ id: string; type?: string }>();
@@ -41,20 +79,60 @@ export default function ClientDetailScreen() {
 
   const [edit, setEdit] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<ClientEditErrors>({});
+  const pendingScrollKeys = useRef<string[]>([]);
+  const { scrollRef, contentRef, registerField, scrollToFirstError } = useFormScrollToError();
+
+  useEffect(() => {
+    if (pendingScrollKeys.current.length === 0) return;
+    const keys = pendingScrollKeys.current;
+    pendingScrollKeys.current = [];
+    scrollToFirstError(keys);
+  }, [errors, scrollToFirstError]);
 
   // Editable fields
   const [firstName, setFirstName] = useState(person?.firstName ?? '');
   const [lastName, setLastName] = useState(person?.lastName ?? '');
   const [name, setName] = useState(company?.name ?? '');
   const [legalName, setLegalName] = useState(company?.legalName ?? '');
-  const [phone, setPhone] = useState((person?.phone ?? company?.phone) ?? '');
-  const [email, setEmail] = useState((person?.email ?? company?.email) ?? '');
-  const [address, setAddress] = useState((person?.address ?? company?.address) ?? '');
+  const [phones, setPhones] = useState<PhoneEntry[]>(phoneEntriesForForm(person?.contactPhones, person?.phone));
+  const [emails, setEmails] = useState<EmailEntry[]>(emailEntriesForForm(person?.contactEmails, person?.email));
+  const [addresses, setAddresses] = useState<AddressEntry[]>(
+    addressEntriesForForm(person?.contactAddresses ?? company?.contactAddresses, person?.address ?? company?.address),
+  );
   const [notes, setNotes] = useState((person?.notes ?? company?.notes) ?? '');
   const [companyId, setCompanyId] = useState(person?.companyId ?? '');
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
   const [industry, setIndustry] = useState(company?.industry ?? '');
-  const [website, setWebsite] = useState(company?.website ?? '');
+  const [websites, setWebsites] = useState<WebsiteEntry[]>(
+    websiteEntriesForForm(company?.contactWebsites, company?.website),
+  );
+
+  const entity = person ?? company;
+
+  useEffect(() => {
+    if (!entity) return;
+    if (isPerson && person) {
+      setFirstName(person.firstName);
+      setLastName(person.lastName);
+      setCompanyId(person.companyId);
+      setPhones(phoneEntriesForForm(person.contactPhones, person.phone));
+      setEmails(emailEntriesForForm(person.contactEmails, person.email));
+      setAddresses(addressEntriesForForm(person.contactAddresses, person.address));
+    } else if (company) {
+      setName(company.name);
+      setLegalName(company.legalName);
+      setIndustry(company.industry);
+      setWebsites(websiteEntriesForForm(company.contactWebsites, company.website));
+      setPhones(phoneEntriesForForm(company.contactPhones, company.phone));
+      setEmails(emailEntriesForForm(company.contactEmails, company.email));
+      setAddresses(addressEntriesForForm(company.contactAddresses, company.address));
+    }
+    setNotes(entity.notes);
+  }, [entity, isPerson, person, company]);
+
+  const primaryPhone = entity ? clientPrimaryPhone(entity) : '';
+  const primaryEmail = entity ? clientPrimaryEmail(entity) : '';
 
   const linkedCompany = useMemo(
     () => (person?.companyId ? findCompany(person.companyId) : undefined),
@@ -87,16 +165,64 @@ export default function ClientDetailScreen() {
 
   const title = isPerson ? person?.fullName ?? '' : company?.name ?? '';
   const subtitle = isPerson
-    ? person?.email || person?.phone || '—'
-    : company?.industry || company?.email || '—';
+    ? primaryEmail || primaryPhone || '—'
+    : company?.industry || primaryEmail || '—';
 
   const handleSave = async () => {
+    const nextErrors: ClientEditErrors = {};
+    if (isPerson && !firstName.trim()) {
+      nextErrors.firstName = 'First name is required';
+    }
+    if (!isPerson && !name.trim()) {
+      nextErrors.name = 'Company name is required';
+    }
+    const emailErrs = emailEntryErrors(emails);
+    if (Object.keys(emailErrs).length > 0) {
+      nextErrors.emails = emailErrs;
+    }
+    if (nextErrors.firstName || nextErrors.name || nextErrors.emails) {
+      pendingScrollKeys.current = clientFormErrorScrollKeys(nextErrors, emails);
+      setErrors(nextErrors);
+      return;
+    }
+    setErrors({});
+
     setSaving(true);
     try {
+      const contact = prepareClientContactPayload(phones, emails);
+      const addressPayload = prepareClientAddressesPayload(addresses);
+      const websitePayload = prepareClientWebsitesPayload(websites);
       if (isPerson && person) {
-        await editPerson(person.id, { firstName, lastName, phone, email, address, notes, companyId });
+        await editPerson(person.id, {
+          firstName,
+          lastName,
+          phone: contact.phone,
+          email: contact.email,
+          contactPhones: contact.contactPhones,
+          contactEmails: contact.contactEmails,
+          address: addressPayload.address,
+          contactAddresses: addressPayload.contactAddresses,
+          notes,
+          companyId,
+          createdBy: person.createdBy,
+        });
       } else if (company) {
-        await editCompany(company.id, { name, legalName, phone, email, address, notes, industry, website });
+        await editCompany(company.id, {
+          name,
+          legalName,
+          phone: contact.phone,
+          email: contact.email,
+          contactPhones: contact.contactPhones,
+          contactEmails: contact.contactEmails,
+          address: addressPayload.address,
+          contactAddresses: addressPayload.contactAddresses,
+          notes,
+          industry,
+          website: websitePayload.website,
+          contactWebsites: websitePayload.contactWebsites,
+          primaryContactId: company.primaryContactId,
+          createdBy: company.createdBy,
+        });
       }
       setEdit(false);
     } catch (error) {
@@ -129,8 +255,10 @@ export default function ClientDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
+      <StackPageHeader title={title} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <View ref={contentRef} collapsable={false}>
           <View style={styles.header}>
             <View style={styles.avatar}>
               <Ionicons name={isPerson ? 'person-outline' : 'business-outline'} size={28} color={colors.black} />
@@ -140,25 +268,25 @@ export default function ClientDetailScreen() {
               <Text style={styles.subtitle}>{subtitle}</Text>
             </View>
             {!edit ? (
-              <Pressable onPress={() => setEdit(true)} style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}>
+              <Pressable onPress={() => { setErrors({}); setEdit(true); }} style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}>
                 <Ionicons name="pencil-outline" size={18} color={colors.black} />
               </Pressable>
             ) : null}
           </View>
 
           <View style={styles.actionRow}>
-            {phone ? (
+            {primaryPhone ? (
               <Pressable
-                onPress={() => Linking.openURL(`tel:${phone}`)}
+                onPress={() => promptPhoneActions(primaryPhone)}
                 style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
               >
                 <Ionicons name="call-outline" size={16} color={colors.black} />
                 <Text style={styles.actionText}>Call</Text>
               </Pressable>
             ) : null}
-            {email ? (
+            {primaryEmail ? (
               <Pressable
-                onPress={() => Linking.openURL(`mailto:${email}`)}
+                onPress={() => promptEmailActions(primaryEmail)}
                 style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
               >
                 <Ionicons name="mail-outline" size={16} color={colors.black} />
@@ -194,7 +322,17 @@ export default function ClientDetailScreen() {
             <View style={styles.formCard}>
               {isPerson ? (
                 <>
-                  <FormField label="First name" value={firstName} onChangeText={setFirstName} required />
+                  <FormField
+                    label="First name"
+                    value={firstName}
+                    onChangeText={(text) => {
+                      setFirstName(text);
+                      if (errors.firstName) setErrors((prev) => ({ ...prev, firstName: undefined }));
+                    }}
+                    error={errors.firstName}
+                    anchorRef={registerField('firstName')}
+                    required
+                  />
                   <FormField label="Last name" value={lastName} onChangeText={setLastName} />
                   <Text style={styles.fieldLabel}>Company</Text>
                   <Pressable
@@ -210,27 +348,88 @@ export default function ClientDetailScreen() {
                 </>
               ) : (
                 <>
-                  <FormField label="Company name" value={name} onChangeText={setName} required />
+                  <FormField
+                    label="Company name"
+                    value={name}
+                    onChangeText={(text) => {
+                      setName(text);
+                      if (errors.name) setErrors((prev) => ({ ...prev, name: undefined }));
+                    }}
+                    error={errors.name}
+                    anchorRef={registerField('name')}
+                    required
+                  />
                   <FormField label="Legal name" value={legalName} onChangeText={setLegalName} />
-                  <FormField label="Industry" value={industry} onChangeText={setIndustry} />
-                  <FormField label="Website" value={website} onChangeText={setWebsite} autoCapitalize="none" />
+                  <IndustryPickerField value={industry} onChange={setIndustry} />
+                  <ContactWebsitesField values={websites} onChange={setWebsites} />
                 </>
               )}
-              <FormField label="Phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-              <FormField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-              <FormField label="Address" value={address} onChangeText={setAddress} multiline />
+              <FormSection title="Contact">
+                <ContactPhonesField values={phones} onChange={setPhones} />
+                <ContactEmailsField
+                  values={emails}
+                  onChange={(next) => {
+                    setEmails(next);
+                    if (errors.emails) setErrors((prev) => ({ ...prev, emails: undefined }));
+                  }}
+                  errors={errors.emails}
+                  registerField={registerField}
+                />
+                <ContactAddressesField values={addresses} onChange={setAddresses} />
+              </FormSection>
               <FormField label="Notes" value={notes} onChangeText={setNotes} multiline />
 
               <View style={styles.formActions}>
-                <PrimaryButton label="Cancel" variant="secondary" onPress={() => setEdit(false)} />
+                <PrimaryButton label="Cancel" variant="secondary" onPress={() => { setErrors({}); setEdit(false); }} />
                 <PrimaryButton label={saving ? 'Saving…' : 'Save'} onPress={handleSave} disabled={saving} />
               </View>
             </View>
           ) : (
             <View style={styles.infoCard}>
-              <InfoRow icon="call-outline" label="Phone" value={phone || '—'} />
-              <InfoRow icon="mail-outline" label="Email" value={email || '—'} />
-              <InfoRow icon="location-outline" label="Address" value={address || '—'} />
+              {entity?.contactPhones.length ? (
+                entity.contactPhones.map((entry, index) => {
+                  const value = formatPhoneDisplay(entry);
+                  const e164 = formatPhoneE164(entry);
+                  return (
+                    <ContactInfoRow
+                      key={`phone-${index}`}
+                      icon="call-outline"
+                      label={entry.label}
+                      value={value}
+                      onPress={() => promptPhoneActions(e164)}
+                    />
+                  );
+                })
+              ) : (
+                <InfoRow icon="call-outline" label="Phone" value="—" />
+              )}
+              {entity?.contactEmails.length ? (
+                entity.contactEmails.map((entry, index) => (
+                  <ContactInfoRow
+                    key={`email-${index}`}
+                    icon="mail-outline"
+                    label={entry.label}
+                    value={entry.address}
+                    onPress={() => promptEmailActions(entry.address)}
+                  />
+                ))
+              ) : (
+                <InfoRow icon="mail-outline" label="Email" value="—" />
+              )}
+              {entity?.contactAddresses.length ? (
+                entity.contactAddresses.map((entry, index) => (
+                  <ContactInfoRow
+                    key={`address-${index}`}
+                    icon="location-outline"
+                    label={entry.reference?.trim() || entry.label}
+                    value={formatAddressLine(entry)}
+                    hint={hasMapPin(entry) ? 'Map pin saved' : undefined}
+                    onPress={() => promptMapsForAddressEntry(entry)}
+                  />
+                ))
+              ) : (
+                <InfoRow icon="location-outline" label="Address" value="—" />
+              )}
               {isPerson ? (
                 linkedCompany ? (
                   <Pressable
@@ -251,7 +450,19 @@ export default function ClientDetailScreen() {
                 )
               ) : null}
               {!isPerson ? <InfoRow icon="briefcase-outline" label="Industry" value={industry || '—'} /> : null}
-              {!isPerson ? <InfoRow icon="globe-outline" label="Website" value={website || '—'} /> : null}
+              {!isPerson && company?.contactWebsites.length ? (
+                company.contactWebsites.map((entry, index) => (
+                  <ContactInfoRow
+                    key={`website-${index}`}
+                    icon="globe-outline"
+                    label={entry.label}
+                    value={entry.url}
+                    onPress={() => openWebsite(entry.url)}
+                  />
+                ))
+              ) : !isPerson ? (
+                <InfoRow icon="globe-outline" label="Website" value="—" />
+              ) : null}
               {notes ? <InfoRow icon="document-text-outline" label="Notes" value={notes} /> : null}
             </View>
           )}
@@ -286,6 +497,7 @@ export default function ClientDetailScreen() {
               <Text style={styles.deleteText}>Delete client</Text>
             </Pressable>
           ) : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -301,6 +513,34 @@ export default function ClientDetailScreen() {
         />
       ) : null}
     </SafeAreaView>
+  );
+}
+
+function ContactInfoRow({
+  icon,
+  label,
+  value,
+  hint,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  hint?: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.infoRow, pressed && styles.pressed]}>
+      <View style={styles.infoIcon}>
+        <Ionicons name={icon} size={16} color={colors.black} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.infoLabel}>{label}</Text>
+        <Text style={[styles.infoValue, styles.linkValue]}>{value}</Text>
+        {hint ? <Text style={styles.infoHint}>{hint}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.grey400} />
+    </Pressable>
   );
 }
 
@@ -320,14 +560,15 @@ function InfoRow({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMap;
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md, padding: spacing.lg },
   emptyTitle: { ...typography.subheading, color: colors.black },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    padding: spacing.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     backgroundColor: colors.white,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -351,7 +592,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  actionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+    marginBottom: spacing.md,
+  },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -370,10 +616,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.grey200,
-    padding: spacing.md,
-    gap: spacing.md,
+    padding: spacing.lg,
+    gap: spacing.lg,
   },
-  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingVertical: spacing.xs },
   infoIcon: {
     width: 32,
     height: 32,
@@ -383,17 +629,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   infoLabel: { ...typography.caption, color: colors.grey600 },
+  infoHint: { ...typography.caption, color: colors.info, marginTop: 2 },
   infoValue: { ...typography.body, color: colors.black, textAlign: 'left' },
   formCard: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.grey200,
-    padding: spacing.md,
-    gap: spacing.sm,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
-  formActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  sectionLabel: { ...typography.label, color: colors.grey600, marginTop: spacing.sm },
+  formActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  sectionLabel: { ...typography.label, color: colors.grey600, marginTop: spacing.md, marginBottom: spacing.sm },
   countDim: { color: colors.grey400, fontWeight: '400' },
   dim: { ...typography.caption, color: colors.grey400 },
   jobsList: { gap: spacing.sm },

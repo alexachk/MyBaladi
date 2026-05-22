@@ -214,7 +214,7 @@ export default function JobsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing || syncing}
+            refreshing={refreshing}
             onRefresh={onRefresh}
             tintColor={colors.primary}
           />

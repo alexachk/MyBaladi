@@ -1,21 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Linking,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CalendarJobRow } from '../../components/CalendarJobRow';
 import { MonthCalendar, type DayMarker } from '../../components/MonthCalendar';
-import { getRoleLabel } from '../../constants/positions';
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { getDescendantIds, memberName } from '../../lib/orgHierarchy';
@@ -23,11 +25,13 @@ import {
   formatHolidayList,
   getLebanonHolidaysByDate,
   hasFullLebanonHolidayYear,
+  HOLIDAY_DATE_DISCLAIMER,
+  HOLIDAY_TENTATIVE_NOTE,
 } from '../../lib/lebanonHolidays';
-import { syncPhoneCalendar } from '../../lib/phoneCalendarSync';
+import { syncPhoneCalendar, unsyncPhoneCalendar } from '../../lib/phoneCalendarSync';
 import { compareJobSchedule, addDaysIso, isoDateParts } from '../../utils/calendarGrid';
 import { formatDate, todayIsoDate } from '../../utils/formatDate';
-import { memberAccentColor } from '../../utils/teamColors';
+import { memberAccentColor, memberAccentBg } from '../../utils/teamColors';
 import type { OrgMember } from '../../types/org';
 import type { JobCard } from '../../types/jobCard';
 
@@ -68,9 +72,30 @@ function buildMarkersByDate(
   return markers;
 }
 
+function scopeScheduledJobs(
+  scheduledJobs: JobCard[],
+  pageScope: ViewScope,
+  userId: string,
+  selectedPersonIds: string[],
+): JobCard[] {
+  if (pageScope === 'mine') {
+    return scheduledJobs.filter(
+      (j) => jobOwnerId(j) === userId || j.technicianId === userId,
+    );
+  }
+  if (!selectedPersonIds.length) return [];
+  const allowed = new Set(selectedPersonIds);
+  return scheduledJobs.filter((j) => {
+    const owner = jobOwnerId(j) || j.technicianId;
+    return owner && allowed.has(owner);
+  });
+}
+
 export default function CalendarScreen() {
+  const { width: pageWidth } = useWindowDimensions();
+  const pagerRef = useRef<ScrollView>(null);
   const { user } = useAuth();
-  const { jobCards, loading, syncing, refresh, canViewTeam, teamMembers, directReports, updateJobCard } =
+  const { jobCards, loading, refresh, canViewTeam, teamMembers, directReports, updateJobCard } =
     useJobCards();
   const today = todayIsoDate();
   const todayParts = isoDateParts(today);
@@ -79,7 +104,7 @@ export default function CalendarScreen() {
   const [month, setMonth] = useState(todayParts.month);
   const [selectedDate, setSelectedDate] = useState(today);
   const [scope, setScope] = useState<ViewScope>('mine');
-  const [personFilter, setPersonFilter] = useState<string | null>(null);
+  const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [showCalendar, setShowCalendar] = useState(true);
   const [phoneSyncing, setPhoneSyncing] = useState(false);
@@ -109,48 +134,37 @@ export default function CalendarScreen() {
 
   const scopedJobs = useMemo(() => {
     if (!user) return [];
-    if (scope === 'mine') {
-      return scheduledJobs.filter(
-        (j) => jobOwnerId(j) === user.$id || j.technicianId === user.$id,
-      );
-    }
-    if (personFilter) {
-      return scheduledJobs.filter(
-        (j) => jobOwnerId(j) === personFilter || j.technicianId === personFilter,
-      );
-    }
-    return scheduledJobs.filter((j) => {
-      const owner = jobOwnerId(j) || j.technicianId;
-      return owner && teamMemberIds.includes(owner);
-    });
-  }, [scheduledJobs, scope, user, personFilter, teamMemberIds]);
+    const ids = scope === 'team' ? selectedPersonIds : [];
+    return scopeScheduledJobs(scheduledJobs, scope, user.$id, ids);
+  }, [scheduledJobs, scope, user, selectedPersonIds, teamMemberIds]);
 
-  const markersByDate = useMemo(() => {
-    if (scope === 'mine' && user) {
-      return buildMarkersByDate(scopedJobs, [user.$id], () => colors.primary);
-    }
-    if (scope === 'team') {
-      return buildMarkersByDate(scopedJobs, teamMemberIds, colorForMember);
-    }
-    return {};
-  }, [scopedJobs, scope, user, teamMemberIds, colorForMember]);
+  const allTeamSelected =
+    teamMemberIds.length > 0 && selectedPersonIds.length === teamMemberIds.length;
 
-  const holidaysByDate = useMemo(() => {
-    const years = new Set([year, month === 0 ? year - 1 : year, month === 11 ? year + 1 : year]);
-    const merged: Record<string, string[]> = {};
-    for (const y of years) {
-      const yearMap = getLebanonHolidaysByDate(y);
-      for (const [date, holidays] of Object.entries(yearMap)) {
-        merged[date] = holidays.map((h) => h.name);
-      }
-    }
-    return merged;
-  }, [year, month]);
+  const togglePerson = (id: string) => {
+    setSelectedPersonIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
 
-  const selectedHolidays = useMemo(
-    () => getLebanonHolidaysByDate(isoDateParts(selectedDate).year)[selectedDate] ?? [],
-    [selectedDate],
-  );
+  const goToScope = (next: ViewScope) => {
+    setScope(next);
+    if (next === 'team') setSelectedPersonIds(teamMemberIds);
+    else setSelectedPersonIds([]);
+    if (canViewTeam) {
+      pagerRef.current?.scrollTo({ x: next === 'mine' ? 0 : pageWidth, animated: true });
+    }
+  };
+
+  const onPagerScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+    const next: ViewScope = index === 0 ? 'mine' : 'team';
+    if (next !== scope) {
+      if (next === 'team') setSelectedPersonIds(teamMemberIds);
+      else setSelectedPersonIds([]);
+    }
+    setScope(next);
+  };
 
   const dayJobs = useMemo(
     () =>
@@ -168,6 +182,18 @@ export default function CalendarScreen() {
     }
     return counts;
   }, [dayJobs]);
+
+  const holidaysByDate = useMemo(() => {
+    const years = new Set([year, month === 0 ? year - 1 : year, month === 11 ? year + 1 : year]);
+    const merged: Record<string, string[]> = {};
+    for (const y of years) {
+      const yearMap = getLebanonHolidaysByDate(y);
+      for (const [date, holidays] of Object.entries(yearMap)) {
+        merged[date] = holidays.map((h) => h.name);
+      }
+    }
+    return merged;
+  }, [year, month]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -234,39 +260,88 @@ export default function CalendarScreen() {
     }
   };
 
-  const handlePhoneSync = () => {
-    Alert.alert('Sync to phone calendar', 'Choose what to add or update on this device.', [
+  const runPhoneUnsync = async (includeJobs: boolean, includeHolidays: boolean) => {
+    if (!user) return;
+    setPhoneSyncing(true);
+    try {
+      const result = await unsyncPhoneCalendar({
+        jobs: scopedJobs,
+        userId: user.$id,
+        years: [year, year - 1, year + 1],
+        includeJobs,
+        includeHolidays,
+        updateJobCard,
+      });
+
+      const parts: string[] = [];
+      if (includeJobs) {
+        parts.push(`${result.jobsRemoved} mission${result.jobsRemoved === 1 ? '' : 's'}`);
+      }
+      if (includeHolidays) {
+        parts.push(`${result.holidaysRemoved} holiday${result.holidaysRemoved === 1 ? '' : 's'}`);
+      }
+
+      Alert.alert(
+        'Phone calendar',
+        parts.length ? `Removed ${parts.join(' and ')} from this device.` : 'Nothing to remove.',
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to remove calendar events.';
+      Alert.alert('Phone calendar', message);
+    } finally {
+      setPhoneSyncing(false);
+    }
+  };
+
+  const showSyncOptions = () => {
+    Alert.alert('Sync to phone', 'Add or update events on this device’s calendar.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Missions only',
-        onPress: () => {
-          void runPhoneSync(true, false);
-        },
-      },
-      {
-        text: 'Holidays only',
-        onPress: () => {
-          void runPhoneSync(false, true);
-        },
-      },
-      {
-        text: 'Both',
-        onPress: () => {
-          void runPhoneSync(true, true);
-        },
-      },
+      { text: 'Missions only', onPress: () => void runPhoneSync(true, false) },
+      { text: 'Holidays only', onPress: () => void runPhoneSync(false, true) },
+      { text: 'Both', onPress: () => void runPhoneSync(true, true) },
     ]);
+  };
+
+  const showUnsyncOptions = () => {
+    Alert.alert(
+      'Remove from phone',
+      'Delete MyBaladi events from this device’s calendar. Missions created with “Add to calendar” on a job are included.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Missions only',
+          style: 'destructive',
+          onPress: () => void runPhoneUnsync(true, false),
+        },
+        {
+          text: 'Holidays only',
+          style: 'destructive',
+          onPress: () => void runPhoneUnsync(false, true),
+        },
+        {
+          text: 'Both',
+          style: 'destructive',
+          onPress: () => void runPhoneUnsync(true, true),
+        },
+      ],
+    );
+  };
+
+  const handlePhoneSync = () => {
+    Alert.alert(
+      'Phone calendar',
+      'Pull down refreshes missions from the server. Sync pushes them to your phone calendar (one-way).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sync…', onPress: showSyncOptions },
+        { text: 'Remove…', style: 'destructive', onPress: showUnsyncOptions },
+      ],
+    );
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing || syncing} onRefresh={onRefresh} tintColor={colors.primary} />
-        }
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.header}>
         <View style={styles.titleRow}>
           <View style={styles.titleBody}>
             <Text style={styles.screenTitle} numberOfLines={1} allowFontScaling={false}>
@@ -293,200 +368,399 @@ export default function CalendarScreen() {
             <ScopeChip
               label="My calendar"
               active={scope === 'mine'}
-              onPress={() => {
-                setScope('mine');
-                setPersonFilter(null);
-              }}
+              onPress={() => goToScope('mine')}
             />
             <ScopeChip
               label="My team"
               active={scope === 'team'}
-              onPress={() => {
-                setScope('team');
-                setPersonFilter(null);
-              }}
+              onPress={() => goToScope('team')}
             />
           </View>
         ) : null}
 
         {scope === 'team' && teamPeople.length > 0 ? (
           <View style={styles.teamPanel}>
-            <Text style={styles.teamPanelLabel}>People under you</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.teamRow}
-            >
-              <TeamPersonChip
-                label="All team"
-                sublabel={`${teamPeople.length} people`}
-                active={!personFilter}
-                swatchColors={teamPeople.map((m) => colorForMember(m.id))}
-                onPress={() => setPersonFilter(null)}
-              />
-              {teamPeople.map((m) => (
-                <TeamPersonChip
-                  key={m.id}
-                  label={m.name.split(' ')[0] || m.email}
-                  sublabel={getRoleLabel(m.position) || m.position || 'Team member'}
-                  active={personFilter === m.id}
-                  color={colorForMember(m.id)}
-                  count={selectedDayCountsByPerson[m.id]}
-                  onPress={() => setPersonFilter(m.id)}
-                />
-              ))}
-            </ScrollView>
-          </View>
-        ) : null}
-
-        <View style={styles.calendarSection}>
-          <View style={styles.calendarToolbar}>
-            {!showCalendar ? (
-              <Pressable
-                onPress={() => shiftDay(-1)}
-                hitSlop={8}
-                style={({ pressed }) => [styles.dayNavBtn, pressed && styles.pressed]}
-              >
-                <Ionicons name="chevron-back" size={18} color={colors.black} />
-              </Pressable>
-            ) : null}
-
-            <Pressable
-              onPress={() => setShowCalendar((v) => !v)}
-              style={({ pressed }) => [styles.calendarToggle, pressed && styles.pressed]}
-            >
-              <Ionicons
-                name={showCalendar ? 'calendar' : 'calendar-outline'}
-                size={16}
-                color={colors.black}
-              />
-              <View style={styles.calendarToggleBody}>
-                <Text style={styles.calendarToggleTitle} numberOfLines={1}>
-                  {formatDate(selectedDate)}
-                </Text>
-                <Text style={styles.calendarToggleSub}>
-                  {dayJobs.length} mission{dayJobs.length === 1 ? '' : 's'}
-                  {showCalendar ? ' · tap to hide' : ' · tap to show calendar'}
-                </Text>
-              </View>
-              <Ionicons
-                name={showCalendar ? 'chevron-up' : 'chevron-down'}
-                size={16}
-                color={colors.grey400}
-              />
-            </Pressable>
-
-            {!showCalendar ? (
-              <View style={styles.dayNavGroup}>
-                {selectedDate !== today ? (
-                  <Pressable
-                    onPress={() => selectDate(today)}
-                    hitSlop={6}
-                    style={({ pressed }) => [styles.todayBtn, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.todayBtnText}>Today</Text>
-                  </Pressable>
-                ) : null}
+            <View style={styles.teamPanelHead}>
+              <Text style={styles.teamPanelLabel}>People under you</Text>
+              <View style={styles.teamPanelActions}>
                 <Pressable
-                  onPress={() => shiftDay(1)}
-                  hitSlop={8}
-                  style={({ pressed }) => [styles.dayNavBtn, pressed && styles.pressed]}
+                  onPress={() => setSelectedPersonIds(teamMemberIds)}
+                  disabled={allTeamSelected}
+                  hitSlop={6}
                 >
-                  <Ionicons name="chevron-forward" size={18} color={colors.black} />
+                  <Text
+                    style={[
+                      styles.teamPanelAction,
+                      allTeamSelected && styles.teamPanelActionMuted,
+                    ]}
+                  >
+                    Select all
+                  </Text>
+                </Pressable>
+                <Text style={styles.teamPanelActionSep}>·</Text>
+                <Pressable
+                  onPress={() => setSelectedPersonIds([])}
+                  disabled={selectedPersonIds.length === 0}
+                  hitSlop={6}
+                >
+                  <Text
+                    style={[
+                      styles.teamPanelAction,
+                      selectedPersonIds.length === 0 && styles.teamPanelActionMuted,
+                    ]}
+                  >
+                    Deselect all
+                  </Text>
                 </Pressable>
               </View>
-            ) : null}
+            </View>
+            <View style={styles.nameTagWrap}>
+              {teamPeople.map((m) => {
+                const color = colorForMember(m.id);
+                const selected = selectedPersonIds.includes(m.id);
+                const label = m.name.trim() || m.email;
+                return (
+                  <TeamNameTag
+                    key={m.id}
+                    label={label}
+                    color={color}
+                    selected={selected}
+                    count={selectedDayCountsByPerson[m.id]}
+                    onPress={() => togglePerson(m.id)}
+                  />
+                );
+              })}
+            </View>
           </View>
+        ) : null}
+      </View>
 
-          {showCalendar ? (
-            <MonthCalendar
-              embedded
+      {canViewTeam ? (
+        <ScrollView
+          ref={pagerRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={onPagerScrollEnd}
+          scrollEventThrottle={16}
+          style={styles.pager}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+        >
+          {(['mine', 'team'] as ViewScope[]).map((pageScope) => (
+            <ScheduleScopePage
+              key={pageScope}
+              pageWidth={pageWidth}
+              pageScope={pageScope}
+              activeScope={scope}
+              user={user}
+              scheduledJobs={scheduledJobs}
+              teamMembers={teamMembers}
+              teamMemberIds={teamMemberIds}
+              selectedPersonIds={selectedPersonIds}
+              selectedDate={selectedDate}
               year={year}
               month={month}
-              selectedDate={selectedDate}
-              markersByDate={markersByDate}
+              today={today}
+              showCalendar={showCalendar}
               holidaysByDate={holidaysByDate}
+              loading={loading}
+              refreshing={refreshing}
+              onRefresh={onRefresh}
               onSelectDate={selectDate}
+              onShiftDay={shiftDay}
+              onToggleCalendar={() => setShowCalendar((v) => !v)}
               onMonthChange={(y, m) => {
                 setYear(y);
                 setMonth(m);
               }}
+              colorForMember={colorForMember}
             />
+          ))}
+        </ScrollView>
+      ) : (
+        <ScheduleScopePage
+          pageWidth={pageWidth}
+          pageScope="mine"
+          activeScope="mine"
+          user={user}
+          scheduledJobs={scheduledJobs}
+          teamMembers={teamMembers}
+          teamMemberIds={teamMemberIds}
+          selectedPersonIds={[]}
+          selectedDate={selectedDate}
+          year={year}
+          month={month}
+          today={today}
+          showCalendar={showCalendar}
+          holidaysByDate={holidaysByDate}
+          loading={loading}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          onSelectDate={selectDate}
+          onShiftDay={shiftDay}
+          onToggleCalendar={() => setShowCalendar((v) => !v)}
+          onMonthChange={(y, m) => {
+            setYear(y);
+            setMonth(m);
+          }}
+          colorForMember={colorForMember}
+        />
+      )}
+    </SafeAreaView>
+  );
+}
+
+interface ScheduleScopePageProps {
+  pageWidth: number;
+  pageScope: ViewScope;
+  activeScope: ViewScope;
+  user: { $id: string } | null;
+  scheduledJobs: JobCard[];
+  teamMembers: OrgMember[];
+  teamMemberIds: string[];
+  selectedPersonIds: string[];
+  selectedDate: string;
+  year: number;
+  month: number;
+  today: string;
+  showCalendar: boolean;
+  holidaysByDate: Record<string, string[]>;
+  loading: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onSelectDate: (iso: string) => void;
+  onShiftDay: (delta: number) => void;
+  onToggleCalendar: () => void;
+  onMonthChange: (year: number, month: number) => void;
+  colorForMember: (memberId: string) => string;
+}
+
+function ScheduleScopePage({
+  pageWidth,
+  pageScope,
+  activeScope,
+  user,
+  scheduledJobs,
+  teamMembers,
+  teamMemberIds,
+  selectedPersonIds,
+  selectedDate,
+  year,
+  month,
+  today,
+  showCalendar,
+  holidaysByDate,
+  loading,
+  refreshing,
+  onRefresh,
+  onSelectDate,
+  onShiftDay,
+  onToggleCalendar,
+  onMonthChange,
+  colorForMember,
+}: ScheduleScopePageProps) {
+  const scopedJobs = useMemo(() => {
+    if (!user) return [];
+    const ids = pageScope === 'team' ? selectedPersonIds : [];
+    return scopeScheduledJobs(scheduledJobs, pageScope, user.$id, ids);
+  }, [scheduledJobs, pageScope, user, selectedPersonIds, teamMemberIds]);
+
+  const activeMemberIds = pageScope === 'team' ? selectedPersonIds : teamMemberIds;
+
+  const markersByDate = useMemo(() => {
+    if (pageScope === 'mine' && user) {
+      return buildMarkersByDate(scopedJobs, [user.$id], () => colors.primary);
+    }
+    if (pageScope === 'team') {
+      return buildMarkersByDate(scopedJobs, activeMemberIds, colorForMember);
+    }
+    return {};
+  }, [scopedJobs, pageScope, user, activeMemberIds, colorForMember]);
+
+  const selectedHolidays = useMemo(
+    () => getLebanonHolidaysByDate(isoDateParts(selectedDate).year)[selectedDate] ?? [],
+    [selectedDate],
+  );
+
+  const dayJobs = useMemo(
+    () =>
+      scopedJobs
+        .filter((j) => j.scheduledDate === selectedDate)
+        .sort(compareJobSchedule),
+    [scopedJobs, selectedDate],
+  );
+
+  const selectedDayCountsByPerson = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const job of dayJobs) {
+      const owner = jobOwnerId(job) || job.technicianId;
+      if (owner) counts[owner] = (counts[owner] ?? 0) + 1;
+    }
+    return counts;
+  }, [dayJobs]);
+
+  return (
+    <ScrollView
+      style={{ width: pageWidth }}
+      contentContainerStyle={styles.pageContent}
+      refreshControl={
+        pageScope === activeScope ? (
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        ) : undefined
+      }
+      showsVerticalScrollIndicator={false}
+      nestedScrollEnabled
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.calendarSection}>
+        <View style={styles.calendarToolbar}>
+          {!showCalendar ? (
+            <Pressable
+              onPress={() => onShiftDay(-1)}
+              hitSlop={8}
+              style={({ pressed }) => [styles.dayNavBtn, pressed && styles.pressed]}
+            >
+              <Ionicons name="chevron-back" size={18} color={colors.black} />
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={onToggleCalendar}
+            style={({ pressed }) => [styles.calendarToggle, pressed && styles.pressed]}
+          >
+            <Ionicons
+              name={showCalendar ? 'calendar' : 'calendar-outline'}
+              size={16}
+              color={colors.black}
+            />
+            <View style={styles.calendarToggleBody}>
+              <Text style={styles.calendarToggleTitle} numberOfLines={1}>
+                {formatDate(selectedDate)}
+              </Text>
+              <Text style={styles.calendarToggleSub}>
+                {dayJobs.length} mission{dayJobs.length === 1 ? '' : 's'}
+                {showCalendar ? ' · tap to hide' : ' · tap to show calendar'}
+              </Text>
+            </View>
+            <Ionicons
+              name={showCalendar ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={colors.grey400}
+            />
+          </Pressable>
+
+          {!showCalendar ? (
+            <View style={styles.dayNavGroup}>
+              {selectedDate !== today ? (
+                <Pressable
+                  onPress={() => onSelectDate(today)}
+                  hitSlop={6}
+                  style={({ pressed }) => [styles.todayBtn, pressed && styles.pressed]}
+                >
+                  <Text style={styles.todayBtnText}>Today</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => onShiftDay(1)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.dayNavBtn, pressed && styles.pressed]}
+              >
+                <Ionicons name="chevron-forward" size={18} color={colors.black} />
+              </Pressable>
+            </View>
           ) : null}
         </View>
 
-        {selectedHolidays.length > 0 ? (
-          <View style={styles.holidayBanner}>
-            <Ionicons name="flag-outline" size={16} color={colors.error} />
-            <View style={styles.holidayBannerBody}>
-              <Text style={styles.holidayBannerTitle}>عطلة رسمية · Public holiday</Text>
-              <Text style={styles.holidayBannerText}>{formatHolidayList(selectedHolidays)}</Text>
-              {selectedHolidays.some((h) => h.tentative) ? (
-                <Text style={styles.holidayBannerNote}>
-                  * قد تتغيّر · May shift when confirmed
-                </Text>
-              ) : null}
+        {showCalendar ? (
+          <MonthCalendar
+            embedded
+            year={year}
+            month={month}
+            selectedDate={selectedDate}
+            markersByDate={markersByDate}
+            holidaysByDate={holidaysByDate}
+            onSelectDate={onSelectDate}
+            onMonthChange={onMonthChange}
+            footer={
+              <Text style={styles.holidayDisclaimer}>{HOLIDAY_DATE_DISCLAIMER}</Text>
+            }
+          />
+        ) : null}
+      </View>
+
+      {selectedHolidays.length > 0 ? (
+        <View style={styles.holidayBanner}>
+          <Ionicons name="flag-outline" size={16} color={colors.error} />
+          <View style={styles.holidayBannerBody}>
+            <Text style={styles.holidayBannerTitle}>Public holiday</Text>
+            <Text style={styles.holidayBannerText}>{formatHolidayList(selectedHolidays)}</Text>
+            {!showCalendar ? (
+              <Text style={styles.holidayBannerNote}>{HOLIDAY_DATE_DISCLAIMER}</Text>
+            ) : null}
+            {selectedHolidays.some((h) => h.tentative) ? (
+              <Text style={styles.holidayBannerNote}>{HOLIDAY_TENTATIVE_NOTE}</Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      {!hasFullLebanonHolidayYear(year) ? (
+        <Text style={styles.holidayNote}>
+          Partial holiday list for {year}. An app update will add the rest.
+        </Text>
+      ) : null}
+
+      {pageScope === 'team' && selectedPersonIds.length > 1 && dayJobs.length > 1 ? (
+        <View style={styles.legend}>
+          {Object.entries(selectedDayCountsByPerson).map(([id, count]) => (
+            <View key={id} style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: colorForMember(id) }]} />
+              <Text style={styles.legendText} numberOfLines={1}>
+                {memberName(teamMembers, id)} · {count}
+              </Text>
             </View>
-          </View>
-        ) : null}
+          ))}
+        </View>
+      ) : null}
 
-        {!hasFullLebanonHolidayYear(year) ? (
-          <Text style={styles.holidayNote}>
-            Partial list for {year} · قائمة جزئية. App update adds the rest.
-          </Text>
-        ) : null}
-
-        {scope === 'team' && !personFilter && dayJobs.length > 1 ? (
-          <View style={styles.legend}>
-            {Object.entries(selectedDayCountsByPerson).map(([id, count]) => (
-              <View key={id} style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: colorForMember(id) }]} />
-                <Text style={styles.legendText} numberOfLines={1}>
-                  {memberName(teamMembers, id)} · {count}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        {loading ? (
-          <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.lg }} />
-        ) : dayJobs.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name="calendar-outline" size={layout.iconLg} color={colors.grey400} />
-            <Text style={styles.emptyTitle}>Nothing scheduled</Text>
-            <Text style={styles.emptyText}>
-              {scope === 'team'
-                ? personFilter
-                  ? `No missions for ${memberName(teamMembers, personFilter)} on this day.`
+      {loading ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.lg }} />
+      ) : dayJobs.length === 0 ? (
+        <View style={styles.empty}>
+          <Ionicons name="calendar-outline" size={layout.iconLg} color={colors.grey400} />
+          <Text style={styles.emptyTitle}>Nothing scheduled</Text>
+          <Text style={styles.emptyText}>
+            {pageScope === 'team'
+              ? selectedPersonIds.length === 0
+                ? 'Select at least one team member above.'
+                : selectedPersonIds.length === 1
+                  ? `No missions for ${memberName(teamMembers, selectedPersonIds[0])} on this day.`
                   : 'No team missions on this day.'
-                : 'Create a job card with a schedule to see it here.'}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.list}>
-            {dayJobs.map((job) => {
-              const owner = jobOwnerId(job) || job.technicianId;
-              const isOwn = owner === user?.$id;
-              const accent =
-                scope === 'team' && owner
-                  ? colorForMember(owner)
-                  : colors.primary;
-              return (
-                <CalendarJobRow
-                  key={job.id}
-                  job={job}
-                  isOwn={isOwn}
-                  accentColor={accent}
-                  ownerLabel={memberName(teamMembers, owner)}
-                  onPress={() => router.push(`/job/${job.id}`)}
-                />
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+              : 'Create a job card with a schedule to see it here.'}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.list}>
+          {dayJobs.map((job) => {
+            const owner = jobOwnerId(job) || job.technicianId;
+            const isOwn = owner === user?.$id;
+            const accent =
+              pageScope === 'team' && owner ? colorForMember(owner) : colors.primary;
+            return (
+              <CalendarJobRow
+                key={job.id}
+                job={job}
+                isOwn={isOwn}
+                accentColor={accent}
+                ownerLabel={memberName(teamMembers, owner)}
+                onPress={() => router.push(`/job/${job.id}`)}
+              />
+            );
+          })}
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
@@ -509,20 +783,16 @@ function ScopeChip({
   );
 }
 
-function TeamPersonChip({
+function TeamNameTag({
   label,
-  sublabel,
-  active,
   color,
-  swatchColors,
+  selected,
   count,
   onPress,
 }: {
   label: string;
-  sublabel?: string;
-  active: boolean;
-  color?: string;
-  swatchColors?: string[];
+  color: string;
+  selected: boolean;
   count?: number;
   onPress: () => void;
 }) {
@@ -530,39 +800,30 @@ function TeamPersonChip({
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
-        styles.personChip,
-        active && styles.personChipActive,
-        active && color ? { borderColor: color } : null,
+        styles.nameTag,
+        selected
+          ? { backgroundColor: memberAccentBg(color), borderColor: color }
+          : styles.nameTagOff,
         pressed && styles.pressed,
       ]}
     >
-      {swatchColors ? (
-        <View style={styles.multiSwatch}>
-          {swatchColors.slice(0, 4).map((c, i) => (
-            <View key={`${c}-${i}`} style={[styles.swatchSlice, { backgroundColor: c }]} />
-          ))}
-        </View>
-      ) : (
-        <View style={[styles.swatch, { backgroundColor: color ?? colors.grey400 }]} />
-      )}
-      <View style={styles.personChipBody}>
-        <Text style={[styles.personChipLabel, active && styles.personChipLabelActive]} numberOfLines={1}>
-          {label}
-          {count ? ` (${count})` : ''}
-        </Text>
-        {sublabel ? (
-          <Text style={styles.personChipSub} numberOfLines={1}>
-            {sublabel}
-          </Text>
-        ) : null}
-      </View>
+      <View style={[styles.nameTagDot, { backgroundColor: selected ? color : colors.grey400 }]} />
+      <Text
+        style={[styles.nameTagText, selected && styles.nameTagTextOn]}
+        numberOfLines={1}
+      >
+        {label}
+        {count ? ` · ${count}` : ''}
+      </Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
+  header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.md },
+  pager: { flex: 1 },
+  pageContent: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   titleBody: { flex: 1, gap: 2 },
   syncBtn: {
@@ -600,37 +861,34 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   teamPanelLabel: { ...typography.label, color: colors.grey600 },
-  teamRow: { gap: spacing.sm },
-  personChip: {
+  teamPanelHead: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    borderWidth: 2,
-    borderColor: colors.grey200,
-    backgroundColor: colors.grey100,
-    maxWidth: 160,
   },
-  personChipActive: {
-    backgroundColor: colors.white,
-    borderColor: colors.black,
-  },
-  swatch: { width: 28, height: 28, borderRadius: 14 },
-  multiSwatch: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    overflow: 'hidden',
+  teamPanelActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  teamPanelAction: { ...typography.caption, color: colors.black, fontWeight: '700', fontSize: 11 },
+  teamPanelActionMuted: { color: colors.grey400 },
+  teamPanelActionSep: { ...typography.caption, color: colors.grey400, fontSize: 11 },
+  nameTagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  nameTag: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    maxWidth: '100%',
   },
-  swatchSlice: { width: '50%', height: '50%' },
-  personChipBody: { flex: 1, minWidth: 0, gap: 1 },
-  personChipLabel: { ...typography.caption, color: colors.black, fontWeight: '700' },
-  personChipLabelActive: { color: colors.black },
-  personChipSub: { ...typography.caption, color: colors.grey600, fontSize: 10 },
+  nameTagOff: {
+    backgroundColor: colors.grey100,
+    borderColor: colors.grey200,
+  },
+  nameTagDot: { width: 8, height: 8, borderRadius: 4 },
+  nameTagText: { ...typography.caption, color: colors.grey600, fontWeight: '600', flexShrink: 1 },
+  nameTagTextOn: { color: colors.black, fontWeight: '700' },
   calendarSection: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
@@ -668,6 +926,13 @@ const styles = StyleSheet.create({
   holidayBannerTitle: { ...typography.caption, color: colors.error, fontWeight: '700' },
   holidayBannerText: { ...typography.body, color: colors.black, fontSize: 14 },
   holidayBannerNote: { ...typography.caption, color: colors.grey600, fontSize: 11 },
+  holidayDisclaimer: {
+    ...typography.caption,
+    color: colors.grey600,
+    fontSize: 11,
+    textAlign: 'center',
+    paddingHorizontal: 0,
+  },
   holidayNote: { ...typography.caption, color: colors.grey600, textAlign: 'center' },
   dayNavGroup: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   dayNavBtn: {

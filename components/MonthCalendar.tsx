@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import { buildMonthGrid, addMonths, monthLabel } from '../utils/calendarGrid';
@@ -22,6 +23,7 @@ interface MonthCalendarProps {
   onSelectDate: (iso: string) => void;
   onMonthChange: (year: number, month: number) => void;
   embedded?: boolean;
+  footer?: ReactNode;
 }
 
 function formatCount(count: number): string {
@@ -37,6 +39,7 @@ export function MonthCalendar({
   onSelectDate,
   onMonthChange,
   embedded = false,
+  footer,
 }: MonthCalendarProps) {
   const today = todayIsoDate();
   const cells = buildMonthGrid(year, month);
@@ -91,6 +94,7 @@ export function MonthCalendar({
               onPress={() => onSelectDate(cell.iso)}
               style={({ pressed }) => [
                 styles.cell,
+                embedded && styles.cellEmbedded,
                 !cell.inMonth && styles.cellOutside,
                 isHoliday && !isSelected && styles.cellHoliday,
                 isSelected && styles.cellSelected,
@@ -112,7 +116,7 @@ export function MonthCalendar({
                 <View style={[styles.holidayPip, isSelected && styles.holidayPipSelected]} />
               ) : null}
               {markers.length === 0 ? (
-                <View style={styles.markerSpacer} />
+                !embedded ? <View style={styles.markerSpacer} /> : null
               ) : markers.length === 1 ? (
                 <View
                   style={[
@@ -144,6 +148,7 @@ export function MonthCalendar({
           );
         })}
       </View>
+      {footer ? <View style={styles.embeddedFooter}>{footer}</View> : null}
     </View>
   );
 }
@@ -163,6 +168,9 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.grey200,
     paddingTop: spacing.sm,
+    paddingBottom: 0,
+    paddingHorizontal: spacing.md,
+    gap: spacing.xs,
   },
   nav: {
     flexDirection: 'row',
@@ -195,6 +203,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     paddingVertical: 2,
   },
+  cellEmbedded: {
+    aspectRatio: undefined,
+    height: 36,
+    justifyContent: 'flex-start',
+    paddingTop: 2,
+    paddingBottom: 0,
+  },
   cellOutside: { opacity: 0.35 },
   cellHoliday: { backgroundColor: '#FFF8E8' },
   cellSelected: { backgroundColor: colors.black },
@@ -211,7 +226,14 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   holidayPipSelected: { backgroundColor: colors.primary },
-  markerSpacer: { height: 16, marginTop: 2 },
+  markerSpacer: { height: 8, marginTop: 1 },
+  embeddedFooter: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.grey200,
+    paddingTop: 6,
+    paddingBottom: spacing.sm,
+    marginTop: 2,
+  },
   singleMarker: {
     marginTop: 2,
     minWidth: 16,

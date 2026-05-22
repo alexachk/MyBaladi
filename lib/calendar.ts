@@ -42,7 +42,7 @@ export async function createCalendarEvent(input: EventInput): Promise<string | n
   const endDate =
     input.endDate ??
     (input.allDay
-      ? new Date(input.startDate.getFullYear(), input.startDate.getMonth(), input.startDate.getDate() + 1)
+      ? input.startDate
       : new Date(input.startDate.getTime() + 60 * 60 * 1000));
 
   const eventId = await Calendar.createEventAsync(calendarId, {
@@ -64,6 +64,8 @@ export async function createAllDayCalendarEvent(input: {
   title: string;
   notes?: string;
   startDate: Date;
+  /** Exclusive end (day after last inclusive day). Defaults to start + 1 day. */
+  endDate?: Date;
 }): Promise<string | null> {
   return createCalendarEvent({
     ...input,
@@ -75,7 +77,7 @@ export async function updateCalendarEvent(eventId: string, input: EventInput): P
   const endDate =
     input.endDate ??
     (input.allDay
-      ? new Date(input.startDate.getFullYear(), input.startDate.getMonth(), input.startDate.getDate() + 1)
+      ? input.startDate
       : new Date(input.startDate.getTime() + 60 * 60 * 1000));
 
   await Calendar.updateEventAsync(eventId, {

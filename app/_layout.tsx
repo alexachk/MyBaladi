@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, LogBox, StyleSheet, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
@@ -41,6 +42,21 @@ function RootNavigator() {
       router.replace('/(tabs)');
     }
   }, [user, loading, isConfigured, segments, router]);
+
+  useEffect(() => {
+    const openFromNotification = (response: Notifications.NotificationResponse) => {
+      const data = response.notification.request.content.data as {
+        jobId?: string;
+      };
+      if (data?.jobId) router.push(`/job/${data.jobId}`);
+    };
+
+    const last = Notifications.getLastNotificationResponse();
+    if (last) openFromNotification(last);
+
+    const sub = Notifications.addNotificationResponseReceivedListener(openFromNotification);
+    return () => sub.remove();
+  }, [router]);
 
   if (loading) {
     return (

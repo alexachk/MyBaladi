@@ -2,7 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -46,16 +49,36 @@ export function PickerSheet({
   onSelect,
 }: Props) {
   const [query, setQuery] = useState('');
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const sheetMaxHeight = windowHeight * (compact ? 0.48 : 0.75);
+  const sheetMaxHeight = Math.min(
+    windowHeight * (compact ? 0.48 : 0.75),
+    windowHeight - keyboardInset - insets.top - spacing.md,
+  );
   const listMaxHeight = Math.max(
     120,
     sheetMaxHeight - (compact ? 88 : 140) - insets.bottom,
   );
 
   useEffect(() => {
-    if (!visible) setQuery('');
+    if (!visible) {
+      setQuery('');
+      setKeyboardInset(0);
+      return;
+    }
+
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardInset(event.endCoordinates.height);
+    });
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardInset(0));
+
+    return () => {
+      show.remove();
+      hide.remove();
+    };
   }, [visible]);
 
   const filtered = useMemo(() => {
@@ -79,7 +102,11 @@ export function PickerSheet({
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={styles.root}>
+      <KeyboardAvoidingView
+        style={styles.root}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? spacing.sm : 0}
+      >
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
 
         <View
@@ -142,6 +169,7 @@ export function PickerSheet({
               style={[styles.list, { maxHeight: listMaxHeight }]}
               contentContainerStyle={{ paddingBottom: spacing.md }}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
               nestedScrollEnabled
             >
               {filtered.map((opt) => (
@@ -165,7 +193,7 @@ export function PickerSheet({
             </ScrollView>
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

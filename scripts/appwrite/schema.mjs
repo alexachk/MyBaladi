@@ -44,6 +44,21 @@ export const ADMIN_USERS_FUNCTION = {
   timeout: 30,
 };
 
+export const PUSH_NOTIFICATIONS_FUNCTION = {
+  id: 'push_notifications',
+  name: 'Push Notifications',
+  runtime: 'node-22',
+  entrypoint: 'src/main.js',
+  execute: [],
+  scopes: ['users.read'],
+  timeout: 15,
+  events(databaseId) {
+    return [`databases.${databaseId}.collections.notifications.documents.*.create`];
+  },
+};
+
+export const APPWRITE_FUNCTIONS = [ADMIN_USERS_FUNCTION, PUSH_NOTIFICATIONS_FUNCTION];
+
 /**
  * Attribute kinds:
  *   { type: 'string', key, size, required?, array?, default? }
@@ -121,6 +136,8 @@ export const COLLECTIONS = [
       { type: 'string', key: 'fullName', size: 256, required: true },
       { type: 'string', key: 'email', size: 256 },
       { type: 'string', key: 'phone', size: 64 },
+      { type: 'string', key: 'contactPhones', size: 4000 },
+      { type: 'string', key: 'contactEmails', size: 8000 },
       { type: 'string', key: 'address', size: 512 },
       { type: 'string', key: 'notes', size: 2000 },
       { type: 'string', key: 'companyId', size: 36 },
@@ -143,9 +160,12 @@ export const COLLECTIONS = [
       { type: 'string', key: 'legalName', size: 256 },
       { type: 'string', key: 'email', size: 256 },
       { type: 'string', key: 'phone', size: 64 },
+      { type: 'string', key: 'contactPhones', size: 4000 },
+      { type: 'string', key: 'contactEmails', size: 8000 },
       { type: 'string', key: 'address', size: 512 },
       { type: 'string', key: 'industry', size: 128 },
       { type: 'string', key: 'website', size: 256 },
+      { type: 'string', key: 'contactWebsites', size: 4000 },
       { type: 'string', key: 'notes', size: 2000 },
       { type: 'string', key: 'primaryContactId', size: 36 },
       { type: 'string', key: 'createdBy', size: 36 },

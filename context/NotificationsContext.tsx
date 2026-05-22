@@ -8,7 +8,6 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import * as Notifications from 'expo-notifications';
 import { client } from '../lib/appwrite/client';
 import { hydrateLocalStoragePolyfill } from '../lib/localStoragePolyfill';
 import {
@@ -20,6 +19,10 @@ import {
   type AppNotification,
   type CreateNotificationInput,
 } from '../lib/appwrite/notifications';
+import {
+  presentActivityNotification,
+  registerDeviceForPushNotifications,
+} from '../lib/notifications';
 import { useAuth } from './JobCardsContext';
 
 interface NotificationsContextValue {
@@ -40,6 +43,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const pushReadyRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!isConfigured || !user) {
@@ -57,6 +61,16 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     refresh().finally(() => setLoading(false));
   }, [refresh]);
+
+  useEffect(() => {
+    if (!user) {
+      pushReadyRef.current = false;
+      return;
+    }
+    void registerDeviceForPushNotifications().then((ok) => {
+      pushReadyRef.current = ok;
+    });
+  }, [user]);
 
   // Realtime updates (needs localStorage polyfill for Appwrite session cookies)
   useEffect(() => {
@@ -83,15 +97,13 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
         if (events.some((e) => e.endsWith('.create'))) {
           setItems((prev) => [payload, ...prev.filter((n) => n.id !== payload.id)]);
-          // Local push banner
-          Notifications.scheduleNotificationAsync({
-            content: {
+          if (!pushReadyRef.current) {
+            void presentActivityNotification({
               title: payload.title,
               body: payload.body || undefined,
               data: { jobId: payload.jobId, notificationId: payload.id },
-            },
-            trigger: null,
-          }).catch(() => undefined);
+            });
+          }
         } else if (events.some((e) => e.endsWith('.update'))) {
           setItems((prev) => prev.map((n) => (n.id === payload.id ? payload : n)));
         } else if (events.some((e) => e.endsWith('.delete'))) {

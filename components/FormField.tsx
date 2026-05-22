@@ -4,6 +4,7 @@ import {
   TextInput,
   TextInputProps,
   View,
+  type Ref,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -13,26 +14,36 @@ interface FormFieldProps extends TextInputProps {
   label: string;
   containerStyle?: StyleProp<ViewStyle>;
   required?: boolean;
+  error?: string;
+  anchorRef?: Ref<View>;
 }
 
 export function FormField({
   label,
   containerStyle,
   required,
+  error,
+  anchorRef,
   style,
   ...props
 }: FormFieldProps) {
   return (
-    <View style={[styles.container, containerStyle]}>
+    <View ref={anchorRef} collapsable={false} style={[styles.container, containerStyle]}>
       <Text style={styles.label}>
         {label}
         {required ? <Text style={styles.required}> *</Text> : null}
       </Text>
       <TextInput
         placeholderTextColor={colors.grey400}
-        style={[styles.input, props.multiline && styles.multiline, style]}
+        style={[
+          styles.input,
+          props.multiline && styles.multiline,
+          error ? styles.inputError : null,
+          style,
+        ]}
         {...props}
       />
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </View>
   );
 }
@@ -68,17 +79,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.black,
   },
+  inputError: {
+    borderColor: colors.error,
+    backgroundColor: colors.errorLight,
+  },
+  errorText: {
+    ...typography.caption,
+    color: colors.error,
+    marginTop: spacing.xs,
+  },
   multiline: {
     minHeight: 110,
     textAlignVertical: 'top',
     textAlign: 'justify',
   },
   section: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
+    marginTop: spacing.sm,
   },
   sectionTitle: {
     ...typography.subheading,
     color: colors.black,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
 });

@@ -1,51 +1,62 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StackPageHeader } from '../../components/StackPageHeader';
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useClients } from '../../context/ClientsContext';
+import { clientContactEmails, clientPrimaryPhone } from '../../lib/clientContact';
+import {
+  companyNameLookup,
+  filterCompaniesBySearch,
+  filterPersonsBySearch,
+} from '../../lib/clientSearch';
 
 type Tab = 'persons' | 'companies';
 
 export default function ClientsIndex() {
   const { persons, companies, loading, refresh } = useClients();
+  const { width: pageWidth } = useWindowDimensions();
+  const pagerRef = useRef<ScrollView>(null);
   const [tab, setTab] = useState<Tab>('persons');
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
-  const filteredPersons = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return persons.filter(
-      (p) =>
-        !q ||
-        p.fullName.toLowerCase().includes(q) ||
-        p.email.toLowerCase().includes(q) ||
-        p.phone.toLowerCase().includes(q),
-    );
-  }, [persons, query]);
+  const companyNames = useMemo(() => companyNameLookup(companies), [companies]);
 
-  const filteredCompanies = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return companies.filter(
-      (c) =>
-        !q ||
-        c.name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        c.phone.toLowerCase().includes(q),
-    );
-  }, [companies, query]);
+  const filteredPersons = useMemo(
+    () => filterPersonsBySearch(persons, query, companyNames),
+    [persons, query, companyNames],
+  );
 
-  const hasResults = tab === 'persons' ? filteredPersons.length > 0 : filteredCompanies.length > 0;
+  const filteredCompanies = useMemo(
+    () => filterCompaniesBySearch(companies, query),
+    [companies, query],
+  );
+
+  const goToTab = (next: Tab) => {
+    setTab(next);
+    pagerRef.current?.scrollTo({ x: next === 'persons' ? 0 : pageWidth, animated: true });
+  };
+
+  const onPagerScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+    setTab(index === 0 ? 'persons' : 'companies');
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -56,11 +67,69 @@ export default function ClientsIndex() {
     }
   };
 
+  const renderList = (pageTab: Tab) => {
+    const filtered = pageTab === 'persons' ? filteredPersons : filteredCompanies;
+    const emptyText = query
+      ? 'No matches.'
+      : pageTab === 'persons'
+        ? 'No persons yet. Add one to start linking jobs.'
+        : 'No companies yet. Add one to start linking jobs.';
+
+    return (
+      <ScrollView
+        style={{ width: pageWidth }}
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
+      >
+        {loading ? (
+          <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
+        ) : filtered.length === 0 ? (
+          <Text style={styles.empty}>{emptyText}</Text>
+        ) : pageTab === 'persons' ? (
+          (filtered as typeof filteredPersons).map((p) => (
+            <ClientRow
+              key={p.id}
+              title={p.fullName}
+              subtitle={clientPrimaryPhone(p) || clientContactEmails(p)[0] || '—'}
+              icon="person-outline"
+              onPress={() => router.push(`/clients/${p.id}?type=person`)}
+            />
+          ))
+        ) : (
+          (filtered as typeof filteredCompanies).map((c) => (
+            <ClientRow
+              key={c.id}
+              title={c.name}
+              subtitle={clientPrimaryPhone(c) || clientContactEmails(c)[0] || c.industry || '—'}
+              icon="business-outline"
+              onPress={() => router.push(`/clients/${c.id}?type=company`)}
+            />
+          ))
+        )}
+      </ScrollView>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
+      <StackPageHeader title="Clients" />
+
       <View style={styles.tabsRow}>
-        <TabButton label={`Persons (${persons.length})`} active={tab === 'persons'} onPress={() => setTab('persons')} />
-        <TabButton label={`Companies (${companies.length})`} active={tab === 'companies'} onPress={() => setTab('companies')} />
+        <TabButton
+          label={`Persons (${persons.length})`}
+          active={tab === 'persons'}
+          onPress={() => goToTab('persons')}
+        />
+        <TabButton
+          label={`Companies (${companies.length})`}
+          active={tab === 'companies'}
+          onPress={() => goToTab('companies')}
+        />
       </View>
 
       <View style={styles.searchWrap}>
@@ -68,50 +137,30 @@ export default function ClientsIndex() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder={tab === 'persons' ? 'Search persons…' : 'Search companies…'}
+          placeholder="Search name, phone, email, address, notes…"
           placeholderTextColor={colors.grey400}
           style={styles.searchInput}
+          textAlignVertical="center"
         />
       </View>
 
-      {loading ? (
-        <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-        >
-          {!hasResults ? (
-            <Text style={styles.empty}>
-              {query
-                ? 'No matches.'
-                : tab === 'persons'
-                  ? 'No persons yet. Add one to start linking jobs.'
-                  : 'No companies yet. Add one to start linking jobs.'}
-            </Text>
-          ) : tab === 'persons' ? (
-            filteredPersons.map((p) => (
-              <ClientRow
-                key={p.id}
-                title={p.fullName}
-                subtitle={p.phone || p.email || '—'}
-                icon="person-outline"
-                onPress={() => router.push(`/clients/${p.id}?type=person`)}
-              />
-            ))
-          ) : (
-            filteredCompanies.map((c) => (
-              <ClientRow
-                key={c.id}
-                title={c.name}
-                subtitle={c.phone || c.email || c.industry || '—'}
-                icon="business-outline"
-                onPress={() => router.push(`/clients/${c.id}?type=company`)}
-              />
-            ))
-          )}
-        </ScrollView>
-      )}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={onPagerScrollEnd}
+        scrollEventThrottle={16}
+        style={styles.pager}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
+        {(['persons', 'companies'] as Tab[]).map((pageTab) => (
+          <View key={pageTab} style={[styles.page, { width: pageWidth }]}>
+            {renderList(pageTab)}
+          </View>
+        ))}
+      </ScrollView>
 
       <Pressable
         style={({ pressed }) => [styles.fab, pressed && styles.pressed]}
@@ -178,13 +227,22 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 8,
+    minHeight: 44,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.grey200,
     borderRadius: radius.md,
   },
-  searchInput: { flex: 1, fontSize: 15, color: colors.black, paddingVertical: 4 },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.black,
+    padding: 0,
+    paddingVertical: 10,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : null),
+  },
+  pager: { flex: 1 },
+  page: { flex: 1 },
   list: { padding: spacing.lg, paddingTop: 0, gap: spacing.sm, paddingBottom: spacing.xxl + 60 },
   empty: { ...typography.body, color: colors.grey600, textAlign: 'center', marginTop: spacing.xl },
   row: {

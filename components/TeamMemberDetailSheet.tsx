@@ -1,16 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef } from 'react';
-import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  Animated,
+  Modal,
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { APP_DEV_POSITION, getRoleDescription, getRoleLabel } from '../constants/positions';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import { APP_DEV_LABEL } from '../lib/appwrite/auth';
-import {
-  memberContactEmails,
-  memberContactPhones,
-  memberPrimaryEmail,
-  memberPrimaryPhone,
-} from '../lib/contactFields';
+import { promptEmailActions, promptPhoneActions } from '../lib/contactActions';
+import { memberContactEmails, memberContactPhones } from '../lib/contactFields';
 import type { OrgMember } from '../types/org';
 
 function roleIcon(position: string): keyof typeof Ionicons.glyphMap {
@@ -42,9 +47,26 @@ export function TeamMemberDetailSheet({
 }: TeamMemberDetailSheetProps) {
   const insets = useSafeAreaInsets();
   const slideY = useRef(new Animated.Value(480)).current;
+  const scrollY = useRef(0);
+  const closing = useRef(false);
+
+  const handleClose = useCallback(() => {
+    if (closing.current) return;
+    closing.current = true;
+    Animated.timing(slideY, {
+      toValue: 480,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      closing.current = false;
+      if (finished) onClose();
+    });
+  }, [onClose, slideY]);
 
   useEffect(() => {
     if (!visible) return;
+    closing.current = false;
+    scrollY.current = 0;
     slideY.setValue(480);
     Animated.spring(slideY, {
       toValue: 0,
@@ -52,7 +74,71 @@ export function TeamMemberDetailSheet({
       damping: 22,
       stiffness: 220,
     }).start();
-  }, [visible, slideY]);
+  }, [visible, slideY, member?.id]);
+
+  const headerPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          gesture.dy > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        onPanResponderGrant: () => {
+          slideY.stopAnimation();
+        },
+        onPanResponderMove: (_, gesture) => {
+          slideY.setValue(Math.max(0, gesture.dy));
+        },
+        onPanResponderRelease: (_, gesture) => {
+          const shouldClose = gesture.dy > 80 || gesture.vy > 0.65;
+          if (shouldClose) {
+            handleClose();
+            return;
+          }
+          Animated.spring(slideY, {
+            toValue: 0,
+            useNativeDriver: true,
+            damping: 22,
+            stiffness: 220,
+          }).start();
+        },
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [handleClose, slideY],
+  );
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_, gesture) => {
+          const downward = gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+          return scrollY.current <= 0 && downward;
+        },
+        onMoveShouldSetPanResponder: (_, gesture) => {
+          const downward = gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+          return scrollY.current <= 0 && downward;
+        },
+        onPanResponderGrant: () => {
+          slideY.stopAnimation();
+        },
+        onPanResponderMove: (_, gesture) => {
+          slideY.setValue(Math.max(0, gesture.dy));
+        },
+        onPanResponderRelease: (_, gesture) => {
+          const shouldClose = gesture.dy > 100 || gesture.vy > 0.65;
+          if (shouldClose) {
+            handleClose();
+            return;
+          }
+          Animated.spring(slideY, {
+            toValue: 0,
+            useNativeDriver: true,
+            damping: 22,
+            stiffness: 220,
+          }).start();
+        },
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [handleClose, slideY],
+  );
 
   if (!member) return null;
 
@@ -62,116 +148,82 @@ export function TeamMemberDetailSheet({
     : 'No role assigned';
   const phones = memberContactPhones(member);
   const emails = memberContactEmails(member);
-  const primaryPhone = memberPrimaryPhone(member);
-  const primaryEmail = memberPrimaryEmail(member);
   const hasContact = phones.length > 0 || emails.length > 0;
-
-  const openPhone = (value: string) => {
-    Linking.openURL(`tel:${value}`).catch(() => {
-      Alert.alert('Call', 'Unable to open the phone app.');
-    });
-  };
-
-  const openEmail = (value: string) => {
-    Linking.openURL(`mailto:${value}`).catch(() => {
-      Alert.alert('Email', 'Unable to open the mail app.');
-    });
-  };
-
-  const openSms = (value: string) => {
-    Linking.openURL(`sms:${value}`).catch(() => {
-      Alert.alert('Message', 'Unable to open the messaging app.');
-    });
-  };
+  const contactRows = [
+    ...phones.map((phone) => ({
+      key: `phone-${phone}`,
+      icon: 'call-outline' as const,
+      label: 'Phone',
+      value: phone,
+      onPress: () => promptPhoneActions(phone),
+    })),
+    ...emails.map((email) => ({
+      key: `email-${email}`,
+      icon: 'mail-outline' as const,
+      label: 'Email',
+      value: email,
+      onPress: () => promptEmailActions(email),
+    })),
+  ];
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
       <View style={styles.root}>
-        <Pressable style={styles.backdrop} onPress={onClose} />
+        <Pressable style={styles.backdrop} onPress={handleClose} />
         <Animated.View
+          {...panResponder.panHandlers}
           style={[
             styles.sheet,
             { paddingBottom: insets.bottom + spacing.md, transform: [{ translateY: slideY }] },
           ]}
         >
-          <View style={styles.handle} />
-          <View style={styles.header}>
-            <View style={[styles.avatar, { backgroundColor: accentColor }]}>
-              <Text style={styles.avatarText}>
-                {(member.name || member.email).charAt(0).toUpperCase()}
-              </Text>
+          <View {...headerPanResponder.panHandlers}>
+            <View style={styles.handle} />
+            <View style={styles.header}>
+              <View style={[styles.avatar, { backgroundColor: accentColor }]}>
+                <Text style={styles.avatarText}>
+                  {(member.name || member.email).charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.headerBody}>
+                <Text style={styles.title} numberOfLines={1}>
+                  {member.name || member.email}
+                </Text>
+                <Text style={styles.subtitle} numberOfLines={1}>
+                  {shortRoleLine(member.position)}
+                </Text>
+              </View>
+              <Pressable onPress={handleClose} hitSlop={10}>
+                <Ionicons name="close" size={22} color={colors.grey600} />
+              </Pressable>
             </View>
-            <View style={styles.headerBody}>
-              <Text style={styles.title} numberOfLines={1}>
-                {member.name || member.email}
-              </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
-                {shortRoleLine(member.position)}
-              </Text>
-            </View>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Ionicons name="close" size={22} color={colors.grey600} />
-            </Pressable>
           </View>
 
-          <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            contentContainerStyle={styles.body}
+            showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={(event) => {
+              scrollY.current = event.nativeEvent.contentOffset.y;
+            }}
+          >
             <View style={styles.tagRow}>
               {isSelf ? <Tag label="You" tint={colors.primary} /> : null}
               {isAppDev ? <Tag label="App Dev" tint={colors.infoLight} /> : null}
             </View>
 
             {hasContact ? (
-              <View style={styles.contactSection}>
-                <View style={styles.actionRow}>
-                  {primaryPhone ? (
-                    <Pressable
-                      onPress={() => openPhone(primaryPhone)}
-                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
-                    >
-                      <Ionicons name="call-outline" size={16} color={colors.black} />
-                      <Text style={styles.actionText}>Call</Text>
-                    </Pressable>
-                  ) : null}
-                  {primaryEmail ? (
-                    <Pressable
-                      onPress={() => openEmail(primaryEmail)}
-                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
-                    >
-                      <Ionicons name="mail-outline" size={16} color={colors.black} />
-                      <Text style={styles.actionText}>Email</Text>
-                    </Pressable>
-                  ) : null}
-                  {primaryPhone ? (
-                    <Pressable
-                      onPress={() => openSms(primaryPhone)}
-                      style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
-                    >
-                      <Ionicons name="chatbubble-outline" size={16} color={colors.black} />
-                      <Text style={styles.actionText}>Text</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-
-                <View style={styles.contactCard}>
-                  {phones.map((phone) => (
-                    <ContactRow
-                      key={`phone-${phone}`}
-                      icon="call-outline"
-                      label="Phone"
-                      value={phone}
-                      onPress={() => openPhone(phone)}
-                    />
-                  ))}
-                  {emails.map((email) => (
-                    <ContactRow
-                      key={`email-${email}`}
-                      icon="mail-outline"
-                      label="Email"
-                      value={email}
-                      onPress={() => openEmail(email)}
-                    />
-                  ))}
-                </View>
+              <View style={styles.contactCard}>
+                {contactRows.map((row, index) => (
+                  <ContactRow
+                    key={row.key}
+                    icon={row.icon}
+                    label={row.label}
+                    value={row.value}
+                    onPress={row.onPress}
+                    isLast={index === contactRows.length - 1}
+                  />
+                ))}
               </View>
             ) : (
               <View style={styles.block}>
@@ -271,14 +323,23 @@ function ContactRow({
   label,
   value,
   onPress,
+  isLast = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value: string;
   onPress: () => void;
+  isLast?: boolean;
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.contactRow, pressed && styles.pressed]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.contactRow,
+        !isLast && styles.contactRowBorder,
+        pressed && styles.pressed,
+      ]}
+    >
       <View style={styles.contactIcon}>
         <Ionicons name={icon} size={16} color={colors.black} />
       </View>
@@ -334,8 +395,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.grey200,
     alignSelf: 'center',
     marginBottom: spacing.md,
+    marginTop: spacing.xs,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md, paddingBottom: spacing.xs },
   avatar: {
     width: 44,
     height: 44,
@@ -355,20 +417,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
   },
   tagText: { fontSize: 10, fontWeight: '700', color: colors.black },
-  contactSection: { gap: spacing.sm },
-  actionRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: colors.grey100,
-    borderWidth: 1,
-    borderColor: colors.grey200,
-  },
-  actionText: { ...typography.caption, color: colors.black, fontWeight: '600' },
   contactCard: {
     backgroundColor: colors.grey100,
     borderRadius: radius.md,
@@ -379,6 +427,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     padding: spacing.md,
+  },
+  contactRowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.grey200,
   },
