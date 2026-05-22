@@ -1,4 +1,8 @@
 import type { ClientType } from './client';
+import type { StoredJobAssignee } from '../lib/jobAssignees';
+import type { StoredJobContact } from '../lib/jobContacts';
+import type { ScheduleLogEntry } from '../lib/jobSchedule';
+import type { StoredWorkReport } from '../lib/jobWorkReports';
 
 export type JobStatus = 'draft' | 'in_progress' | 'completed' | 'pending_review';
 
@@ -12,13 +16,18 @@ export interface JobCard {
   contactName: string;
   contactPhone: string;
   missionType: string;
+  missionTypes?: string[];
   equipment: string;
   technicianName: string;
   scheduledDate: string;
+  initialScheduledDate?: string | null;
+  initialScheduledTime?: string | null;
+  scheduleLog?: ScheduleLogEntry[];
   arrivalTime: string;
   departureTime: string;
   workPerformed: string;
   partsUsed: string;
+  workReports?: StoredWorkReport[];
   notes: string;
   status: JobStatus;
   priority: JobPriority;
@@ -31,6 +40,8 @@ export interface JobCard {
   parentJobId?: string | null;
   assigneeId?: string | null;
   assigneeName?: string | null;
+  assignees?: StoredJobAssignee[];
+  jobContacts?: StoredJobContact[];
   technicianId?: string | null;
 
   scheduledTime?: string | null;

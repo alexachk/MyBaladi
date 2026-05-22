@@ -2,9 +2,22 @@ import { ID, Permission, Query, Role } from 'react-native-appwrite';
 import { appwriteConfig, isAppwriteConfigured, isAppwriteDatabaseConfigured } from './config';
 import { getAccount, getDatabases } from './client';
 import { listPersonnel } from './adminUsers';
-import { getManagerReadersForJob } from '../orgHierarchy';
+import { getManagerReadersForAssignees } from '../orgHierarchy';
 import { JobCard, JobPriority, JobStatus } from '../../types/jobCard';
 import type { ClientType } from '../../types/client';
+import { parseJobPeopleBlob, serializeJobPeopleBlob } from '../jobPeople';
+import {
+  formatMissionTypesDisplay,
+  missionTypesForForm,
+  primaryMissionType,
+} from '../jobMissions';
+import { initialSchedule, type StoredJobSchedule } from '../jobSchedule';
+import {
+  formatPartsSummary,
+  formatWorkSummary,
+  parseWorkReportsFromStorage,
+  serializeWorkReportsToStorage,
+} from '../jobWorkReports';
 
 const NULLABLE_DATETIMES = ['reminderAt', 'startedAt', 'finishedAt', 'lockedAt'] as const;
 const STRING_FIELDS = [
@@ -62,6 +75,12 @@ function nullableDate(value: unknown): string | null {
 }
 
 function documentToJobCard(doc: JobCardDocBase): JobCard {
+  const people = parseJobPeopleBlob(doc.assignees);
+  const missionTypes = people.missions.length
+    ? people.missions
+    : missionTypesForForm(str(doc.missionType));
+  const workReports = parseWorkReportsFromStorage(str(doc.workPerformed), str(doc.partsUsed));
+
   return {
     id: doc.$id,
     reference: str(doc.reference),
@@ -69,14 +88,16 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     siteAddress: str(doc.siteAddress),
     contactName: str(doc.contactName),
     contactPhone: str(doc.contactPhone),
-    missionType: str(doc.missionType),
+    missionType: formatMissionTypesDisplay(missionTypes) || str(doc.missionType),
+    missionTypes,
     equipment: str(doc.equipment),
     technicianName: str(doc.technicianName),
     scheduledDate: str(doc.scheduledDate),
     arrivalTime: str(doc.arrivalTime),
     departureTime: str(doc.departureTime),
-    workPerformed: str(doc.workPerformed),
-    partsUsed: str(doc.partsUsed),
+    workPerformed: formatWorkSummary(workReports) || str(doc.workPerformed),
+    partsUsed: formatPartsSummary(workReports) || str(doc.partsUsed),
+    workReports,
     notes: str(doc.notes),
     status: doc.status,
     priority: doc.priority,
@@ -88,6 +109,11 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     parentJobId: nullableStr(doc.parentJobId),
     assigneeId: nullableStr(doc.assigneeId),
     assigneeName: nullableStr(doc.assigneeName),
+    assignees: people.team,
+    jobContacts: people.contacts,
+    initialScheduledDate: people.schedule?.initialDate || str(doc.scheduledDate) || null,
+    initialScheduledTime: people.schedule?.initialTime ?? nullableStr(doc.scheduledTime),
+    scheduleLog: people.schedule?.log ?? [],
     technicianId: nullableStr(doc.technicianId),
     scheduledTime: nullableStr(doc.scheduledTime),
     reminderAt: nullableDate(doc.reminderAt),
@@ -123,6 +149,23 @@ function normalizeForWrite(
   if (job.clientType !== undefined) out.clientType = job.clientType ?? null;
   if (job.photoIds !== undefined) out.photoIds = job.photoIds ?? [];
   if (job.documentIds !== undefined) out.documentIds = job.documentIds ?? [];
+  if (job.workReports !== undefined) {
+    const stored = serializeWorkReportsToStorage(job.workReports);
+    out.workPerformed = stored.workPerformed;
+    out.partsUsed = stored.partsUsed;
+  }
+  if (job.assignees !== undefined || job.jobContacts !== undefined || job.missionTypes !== undefined) {
+    out.assignees = serializeJobPeopleBlob({
+      team: job.assignees ?? [],
+      contacts: job.jobContacts ?? [],
+      missions: job.missionTypes ?? missionTypesForForm(typeof job.missionType === 'string' ? job.missionType : ''),
+      schedule: buildScheduleBlobForWrite(job),
+    });
+  }
+  if (job.missionTypes !== undefined) {
+    out.missionType =
+      primaryMissionType(job.missionTypes) || formatMissionTypesDisplay(job.missionTypes);
+  }
 
   for (const key of NULLABLE_DATETIMES) {
     if (job[key] !== undefined) {
@@ -134,6 +177,28 @@ function normalizeForWrite(
   if (technicianId) out.technicianId = technicianId;
 
   return out;
+}
+
+function buildScheduleBlobForWrite(job: Partial<JobCard>): StoredJobSchedule | undefined {
+  if (
+    job.scheduleLog !== undefined ||
+    job.initialScheduledDate !== undefined ||
+    job.initialScheduledTime !== undefined
+  ) {
+    const initialDate = job.initialScheduledDate || job.scheduledDate || '';
+    if (!initialDate) return undefined;
+    return {
+      initialDate,
+      initialTime: job.initialScheduledTime ?? job.scheduledTime ?? null,
+      log: job.scheduleLog ?? [],
+    };
+  }
+
+  if (job.scheduledDate) {
+    return initialSchedule(job.scheduledDate, job.scheduledTime ?? null);
+  }
+
+  return undefined;
 }
 
 function userPermissions(userId: string, extraReaderIds: string[] = []) {
@@ -205,7 +270,12 @@ export async function createJobCardInAppwrite(
       position: p.position,
       managerId: p.managerId ?? '',
     }));
-    managerReaders = getManagerReadersForJob(userId, job.assigneeId, members);
+    managerReaders = getManagerReadersForAssignees(
+      userId,
+      job.assignees?.map((a) => a.userId).filter(Boolean) ??
+        (job.assigneeId ? [job.assigneeId] : []),
+      members,
+    );
   } catch {
     // best-effort — owner + admin permissions still apply
   }

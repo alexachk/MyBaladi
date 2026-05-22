@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Contacts from 'expo-contacts';
-import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -13,22 +12,63 @@ import {
   Text,
   View,
 } from 'react-native';
-import { ClientsSidebar } from '../../components/ClientsSidebar';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { ContactAddressesField } from '../../components/ContactAddressesField';
 import { DateTimeField } from '../../components/DateTimeField';
 import { FormField, FormSection } from '../../components/FormField';
+import { JobAssigneesField } from '../../components/JobAssigneesField';
+import { JobContactsField } from '../../components/JobContactsField';
+import { JobWorkReportsField } from '../../components/JobWorkReportsField';
+import { MissionTypesField } from '../../components/MissionTypesField';
 import { PickerSheet, type PickerOption } from '../../components/PickerSheet';
 import { PrimaryButton } from '../../components/PrimaryButton';
+import { StackPageHeader } from '../../components/StackPageHeader';
 import { StatusPicker } from '../../components/StatusBadge';
 import { colors, radius, spacing, typography } from '../../constants/theme';
 import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { listPersonnel, type Personnel } from '../../lib/appwrite/adminUsers';
-import { createCalendarEvent } from '../../lib/calendar';
-import { promptMapsForAddress } from '../../lib/maps';
+import {
+  addressEntriesForForm,
+  defaultAddressEntry,
+  prepareClientAddressesPayload,
+  type AddressEntry,
+} from '../../lib/clientAddresses';
+import {
+  isPhoneCalendarJobsSyncActive,
+  syncSingleJobToPhoneCalendar,
+} from '../../lib/phoneCalendarSync';
+import { jobFormErrorScrollKeys, useFormScrollToError, type JobFormFieldErrors } from '../../lib/formScroll';
+import {
+  assigneesForForm,
+  defaultAssigneeEntry,
+  normalizeAssigneeEntries,
+  primaryAssigneeFromEntries,
+  type AssigneeEntry,
+} from '../../lib/jobAssignees';
+import {
+  defaultJobContactEntry,
+  jobContactFromPerson,
+  jobContactsForForm,
+  normalizeJobContactEntries,
+  primaryJobContactFromEntries,
+  type JobContactEntry,
+} from '../../lib/jobContacts';
+import {
+  formatMissionTypesDisplay,
+  missionTypesForForm,
+  normalizeMissionTypes,
+} from '../../lib/jobMissions';
+import {
+  normalizeWorkReportEntries,
+  serializeWorkReportsToStorage,
+  workReportsForForm,
+  type WorkReportEntry,
+} from '../../lib/jobWorkReports';
 import { scheduleJobReminder } from '../../lib/notifications';
+import type { Company } from '../../types/client';
 import {
   JOB_PRIORITY_LABELS,
-  MISSION_TYPES,
   type JobPriority,
   type JobStatus,
 } from '../../types/jobCard';
@@ -45,10 +85,18 @@ const REMINDER_OPTIONS: Array<{ value: number; label: string }> = [
 
 const PRIORITIES = Object.keys(JOB_PRIORITY_LABELS) as JobPriority[];
 
+function clientAddressesForForm(
+  client: { address?: string; contactAddresses?: Parameters<typeof addressEntriesForForm>[0] } | undefined,
+  fallback?: string,
+): AddressEntry[] {
+  if (!client) return addressEntriesForForm(undefined, fallback);
+  return addressEntriesForForm(client.contactAddresses, client.address ?? fallback);
+}
+
 export default function NewJobCardScreen() {
-  const { addJobCard, getJobCard } = useJobCards();
+  const { addJobCard, getJobCard, updateJobCard } = useJobCards();
   const { user } = useAuth();
-  const { findPerson, findCompany } = useClients();
+  const { findPerson, findCompany, persons, companies } = useClients();
 
   const params = useLocalSearchParams<{
     personId?: string;
@@ -59,142 +107,158 @@ export default function NewJobCardScreen() {
 
   const parentJob = params.parentJobId ? getJobCard(params.parentJobId) : undefined;
 
-  const [reference] = useState(generateReference);
-  const [saving, setSaving] = useState(false);
-  const [showClients, setShowClients] = useState(false);
-
-  // Client selection
   const initialPerson = params.personId ? findPerson(params.personId) : undefined;
   const initialCompany = params.companyId ? findCompany(params.companyId) : undefined;
-  const initialType: ClientType | null = initialPerson
-    ? 'person'
-    : initialCompany
-      ? 'company'
-      : parentJob?.clientType ?? null;
-  const initialPersonId = initialPerson?.id ?? parentJob?.personId ?? null;
-  const initialCompanyId = initialCompany?.id ?? parentJob?.companyId ?? null;
-  const initialClientName =
-    initialPerson?.fullName ??
+
+  const [reference] = useState(generateReference);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<JobFormFieldErrors>({});
+  const pendingScrollKeys = useRef<string[]>([]);
+  const { scrollRef, contentRef, registerField, scrollToFirstError } = useFormScrollToError();
+
+  const [companyId, setCompanyId] = useState(
+    initialCompany?.id ?? initialPerson?.companyId ?? parentJob?.companyId ?? '',
+  );
+  const [clientType, setClientType] = useState<ClientType | null>(() => {
+    if (initialCompany || initialPerson?.companyId || parentJob?.companyId) return 'company';
+    if (initialPerson || parentJob?.personId) return 'person';
+    return parentJob?.clientType ?? null;
+  });
+  const [clientName, setClientName] = useState(
     initialCompany?.name ??
-    params.clientName ??
-    parentJob?.clientName ??
-    '';
+      (initialPerson?.companyId ? findCompany(initialPerson.companyId)?.name : undefined) ??
+      initialPerson?.fullName ??
+      params.clientName ??
+      parentJob?.clientName ??
+      '',
+  );
+  const [manualClientName, setManualClientName] = useState('');
 
-  const [clientType, setClientType] = useState<ClientType | null>(initialType);
-  const [personId, setPersonId] = useState<string | null>(initialPersonId);
-  const [companyId, setCompanyId] = useState<string | null>(initialCompanyId);
-  const [clientName, setClientName] = useState(initialClientName);
+  const initialClient = initialPerson ?? initialCompany;
+  const [siteAddresses, setSiteAddresses] = useState<AddressEntry[]>(() =>
+    clientAddressesForForm(initialClient, parentJob?.siteAddress),
+  );
+  const [jobContacts, setJobContacts] = useState<JobContactEntry[]>(() => {
+    if (parentJob?.jobContacts?.length) return jobContactsForForm(parentJob.jobContacts);
+    if (initialPerson) return [jobContactFromPerson(initialPerson, 'Primary')];
+    return jobContactsForForm(undefined, {
+      personId: parentJob?.personId,
+      name: parentJob?.contactName,
+      phone: parentJob?.contactPhone,
+    });
+  });
 
-  const [siteAddress, setSiteAddress] = useState(
-    initialPerson?.address ?? initialCompany?.address ?? parentJob?.siteAddress ?? '',
+  const [assignees, setAssignees] = useState<AssigneeEntry[]>(() => {
+    if (parentJob?.assignees?.length) return assigneesForForm(parentJob.assignees);
+    if (parentJob?.assigneeId) {
+      return assigneesForForm(undefined, parentJob.assigneeId, parentJob.assigneeName ?? '');
+    }
+    if (user?.$id) return [defaultAssigneeEntry(user.$id, user.name ?? '', 'Lead')];
+    return [defaultAssigneeEntry()];
+  });
+
+  const [missionTypes, setMissionTypes] = useState<string[]>(() =>
+    parentJob?.missionTypes?.length
+      ? [...parentJob.missionTypes]
+      : missionTypesForForm(parentJob?.missionType),
   );
-  const [contactName, setContactName] = useState(
-    initialPerson?.fullName ?? parentJob?.contactName ?? '',
-  );
-  const [contactPhone, setContactPhone] = useState(
-    initialPerson?.phone ?? initialCompany?.phone ?? parentJob?.contactPhone ?? '',
-  );
-  const [missionType, setMissionType] = useState<string>(parentJob?.missionType ?? MISSION_TYPES[0]);
   const [equipment, setEquipment] = useState(parentJob?.equipment ?? '');
-
-  const [assigneeId, setAssigneeId] = useState<string | null>(
-    parentJob?.assigneeId ?? user?.$id ?? null,
-  );
-  const [assigneeName, setAssigneeName] = useState<string>(
-    parentJob?.assigneeName ?? user?.name ?? '',
-  );
   const [personnel, setPersonnel] = useState<Personnel[]>([]);
   const [personnelLoading, setPersonnelLoading] = useState(false);
-  const [showAssigneePicker, setShowAssigneePicker] = useState(false);
+  const [showCompanyPicker, setShowCompanyPicker] = useState(false);
 
   const [scheduledAt, setScheduledAt] = useState<Date | null>(new Date());
   const [reminderMinutes, setReminderMinutes] = useState<number | null>(60);
-  const [addToCalendar, setAddToCalendar] = useState(true);
+  const [addToCalendar, setAddToCalendar] = useState(false);
+  const [phoneCalendarSyncActive, setPhoneCalendarSyncActive] = useState(false);
   const [arrivalAt, setArrivalAt] = useState<Date | null>(null);
   const [departureAt, setDepartureAt] = useState<Date | null>(null);
-  const [resolvingAddress, setResolvingAddress] = useState(false);
-  const [workPerformed, setWorkPerformed] = useState('');
-  const [partsUsed, setPartsUsed] = useState(parentJob?.partsUsed ?? '');
-  const [notes, setNotes] = useState(parentJob ? `Follow-up of ${parentJob.reference}.\n${parentJob.notes ?? ''}`.trim() : '');
+  const [workReports, setWorkReports] = useState<WorkReportEntry[]>(() =>
+    workReportsForForm(parentJob?.workReports, parentJob?.workPerformed, parentJob?.partsUsed),
+  );
+  const [notes, setNotes] = useState(
+    parentJob ? `Follow-up of ${parentJob.reference}.\n${parentJob.notes ?? ''}`.trim() : '',
+  );
   const [status, setStatus] = useState<JobStatus>('draft');
   const [priority, setPriority] = useState<JobPriority>(parentJob?.priority ?? 'normal');
 
-  const selectedClientLabel = useMemo(() => {
-    if (clientType === 'person' && personId) {
-      const p = findPerson(personId);
-      return p ? p.fullName : clientName;
-    }
-    if (clientType === 'company' && companyId) {
-      const c = findCompany(companyId);
-      return c ? c.name : clientName;
-    }
-    return clientName;
-  }, [clientType, personId, companyId, clientName, findPerson, findCompany]);
+  const selectedCompany = useMemo(
+    () => companies.find((c) => c.id === companyId),
+    [companies, companyId],
+  );
+  const linkedPersons = useMemo(
+    () =>
+      companyId
+        ? persons.filter((p) => p.companyId === companyId)
+        : [],
+    [persons, companyId],
+  );
 
-  const openAssigneePicker = useCallback(async () => {
-    setShowAssigneePicker(true);
-    if (personnel.length === 0 && !personnelLoading) {
-      setPersonnelLoading(true);
-      try {
-        const list = await listPersonnel();
-        setPersonnel(list);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to load personnel.';
-        Alert.alert('Technicians', message);
-      } finally {
-        setPersonnelLoading(false);
-      }
+  const companyOptions = useMemo(
+    () => [
+      { id: '', label: 'No company', hint: 'Independent contact', icon: 'remove-circle-outline' as const },
+      ...companies.map((c) => ({
+        id: c.id,
+        label: c.name,
+        hint: c.industry || c.email || undefined,
+        icon: 'business-outline' as const,
+      })),
+    ],
+    [companies],
+  );
+
+  const hasLinkedClient = Boolean(companyId || jobContacts.some((c) => c.personId || c.name.trim()));
+  const displayClientName = selectedCompany?.name ?? clientName ?? manualClientName;
+
+  useEffect(() => {
+    if (pendingScrollKeys.current.length === 0) return;
+    const keys = pendingScrollKeys.current;
+    pendingScrollKeys.current = [];
+    scrollToFirstError(keys);
+  }, [errors, scrollToFirstError]);
+
+  useEffect(() => {
+    isPhoneCalendarJobsSyncActive()
+      .then((active) => {
+        setPhoneCalendarSyncActive(active);
+        if (!active) setAddToCalendar(true);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const loadPersonnel = useCallback(async () => {
+    if (personnel.length > 0 || personnelLoading) return;
+    setPersonnelLoading(true);
+    try {
+      setPersonnel(await listPersonnel());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load personnel.';
+      Alert.alert('Technicians', message);
+    } finally {
+      setPersonnelLoading(false);
     }
   }, [personnel.length, personnelLoading]);
 
   useEffect(() => {
-    // Warm the list in the background so first tap is instant
-    if (personnel.length === 0 && !personnelLoading) {
-      setPersonnelLoading(true);
-      listPersonnel()
-        .then(setPersonnel)
-        .catch(() => undefined)
-        .finally(() => setPersonnelLoading(false));
-    }
-  }, [personnel.length, personnelLoading]);
+    loadPersonnel().catch(() => undefined);
+  }, [loadPersonnel]);
 
-  const useCurrentLocation = async () => {
-    setResolvingAddress(true);
-    try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Location', 'Allow location access to auto-fill the site address.');
-        return;
-      }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const [place] = await Location.reverseGeocodeAsync({
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-      });
-      if (place) {
-        const parts = [
-          place.streetNumber,
-          place.street,
-          place.district,
-          place.city,
-          place.region,
-          place.postalCode,
-          place.country,
-        ].filter(Boolean);
-        setSiteAddress(parts.join(', '));
-      } else {
-        setSiteAddress(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to fetch location.';
-      Alert.alert('Location', message);
-    } finally {
-      setResolvingAddress(false);
+  const applyCompany = (company: Company | undefined) => {
+    if (!company) {
+      setCompanyId('');
+      setClientType(null);
+      setClientName(manualClientName);
+      setJobContacts((prev) => prev.filter((c) => !c.personId));
+      return;
     }
-  };
-
-  const openInMaps = () => {
-    promptMapsForAddress(siteAddress);
+    setCompanyId(company.id);
+    setClientType('company');
+    setClientName(company.name);
+    setSiteAddresses(clientAddressesForForm(company));
+    setJobContacts((prev) =>
+      prev.filter((c) => !c.personId || findPerson(c.personId)?.companyId === company.id),
+    );
+    if (errors.client) setErrors((prev) => ({ ...prev, client: undefined }));
   };
 
   const [deviceContacts, setDeviceContacts] = useState<Contacts.ExistingContact[]>([]);
@@ -251,44 +315,62 @@ export default function NewJobCardScreen() {
     );
     if (!found) return;
     const phone = found.phoneNumbers?.[0]?.number?.replace(/\s+/g, ' ').trim() ?? '';
-    if (found.name) setContactName(found.name);
-    if (phone) setContactPhone(phone);
+    const name = found.name ?? '';
+    setJobContacts((prev) => {
+      const filled = prev.filter((row) => row.name.trim() || row.phone.trim() || row.personId);
+      return [...filled, defaultJobContactEntry(name, phone, filled.length === 0 ? 'Primary' : 'Site')];
+    });
     const addr = found.addresses?.[0];
-    if (addr && !siteAddress) {
+    const currentAddress = prepareClientAddressesPayload(siteAddresses).address;
+    if (addr && !currentAddress.trim()) {
       const parts = [addr.street, addr.city, addr.region, addr.postalCode, addr.country].filter(
         Boolean,
       );
-      if (parts.length) setSiteAddress(parts.join(', '));
-    }
-  };
-
-  const handlePick = (
-    selection:
-      | { type: 'person'; person: ReturnType<typeof findPerson> }
-      | { type: 'company'; company: ReturnType<typeof findCompany> },
-  ) => {
-    if (selection.type === 'person' && selection.person) {
-      setClientType('person');
-      setPersonId(selection.person.id);
-      setCompanyId(null);
-      setClientName(selection.person.fullName);
-      if (!siteAddress) setSiteAddress(selection.person.address);
-      if (!contactName) setContactName(selection.person.fullName);
-      if (!contactPhone) setContactPhone(selection.person.phone);
-    } else if (selection.type === 'company' && selection.company) {
-      setClientType('company');
-      setCompanyId(selection.company.id);
-      setPersonId(null);
-      setClientName(selection.company.name);
-      if (!siteAddress) setSiteAddress(selection.company.address);
-      if (!contactPhone) setContactPhone(selection.company.phone);
+      if (parts.length) {
+        setSiteAddresses((prev) => {
+          const rows = prev.length > 0 ? [...prev] : [defaultAddressEntry()];
+          rows[0] = { ...rows[0], text: parts.join(', ') };
+          return rows;
+        });
+      }
     }
   };
 
   const handleSave = async () => {
-    if (!clientName.trim() || !assigneeName.trim()) {
-      Alert.alert('Required fields', 'Pick a client and assign a technician.');
+    const finalClientName = (displayClientName || manualClientName).trim();
+    const normalizedAssignees = normalizeAssigneeEntries(assignees);
+    const nextErrors: JobFormFieldErrors = {};
+
+    if (!finalClientName) {
+      nextErrors.client = 'Pick a company, contact, or enter a client name';
+    }
+    if (!normalizedAssignees.some((entry) => entry.userId)) {
+      nextErrors.assignees = 'Add at least one team member';
+    }
+    if (!normalizeMissionTypes(missionTypes).length) {
+      nextErrors.missions = 'Select at least one mission type';
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      pendingScrollKeys.current = jobFormErrorScrollKeys(nextErrors);
+      setErrors(nextErrors);
       return;
+    }
+    setErrors({});
+
+    const addressPayload = prepareClientAddressesPayload(siteAddresses);
+    const normalizedContacts = normalizeJobContactEntries(jobContacts);
+    const normalizedMissionTypes = normalizeMissionTypes(missionTypes);
+    const missionSummary = formatMissionTypesDisplay(normalizedMissionTypes);
+    const primaryContact = primaryJobContactFromEntries(normalizedContacts);
+    const primary = primaryAssigneeFromEntries(normalizedAssignees);
+    const normalizedWorkReports = normalizeWorkReportEntries(workReports);
+    const workReportStorage = serializeWorkReportsToStorage(normalizedWorkReports);
+    let resolvedClientType = clientType;
+    let resolvedClientName = finalClientName;
+    if (!companyId && primaryContact.personId) {
+      resolvedClientType = 'person';
+      if (!resolvedClientName) resolvedClientName = primaryContact.name;
     }
 
     setSaving(true);
@@ -305,15 +387,13 @@ export default function NewJobCardScreen() {
           ? new Date(scheduledAt.getTime() - reminderMinutes * 60 * 1000)
           : null;
 
-      // Schedule local notification + calendar event before saving so we can persist their IDs
       let notificationId: string | null = null;
-      let calendarEventId: string | null = null;
 
       if (reminderAt && reminderAt.getTime() > Date.now()) {
         try {
           notificationId = await scheduleJobReminder({
             jobReference: reference,
-            clientName: clientName.trim(),
+            clientName: resolvedClientName,
             fireAt: reminderAt,
           });
         } catch {
@@ -321,52 +401,54 @@ export default function NewJobCardScreen() {
         }
       }
 
-      if (scheduledAt && addToCalendar) {
-        try {
-          calendarEventId = await createCalendarEvent({
-            title: `[${reference}] ${clientName.trim()}`,
-            notes: `${missionType}${equipment.trim() ? ` · ${equipment.trim()}` : ''}${notes.trim() ? `\n\n${notes.trim()}` : ''}`,
-            location: siteAddress.trim() || undefined,
-            startDate: scheduledAt,
-            alarmMinutesBefore: reminderMinutes ?? undefined,
-          });
-        } catch {
-          calendarEventId = null;
-        }
-      }
-
       const job = await addJobCard({
         reference,
-        clientName: clientName.trim(),
-        siteAddress: siteAddress.trim(),
-        contactName: contactName.trim(),
-        contactPhone: contactPhone.trim(),
-        missionType,
+        clientName: resolvedClientName,
+        siteAddress: addressPayload.address,
+        contactName: primaryContact.name,
+        contactPhone: primaryContact.phone,
+        jobContacts: normalizedContacts,
+        missionType: missionSummary,
+        missionTypes: normalizedMissionTypes,
         equipment: equipment.trim(),
-        technicianName: assigneeName.trim(),
-        assigneeId,
-        assigneeName: assigneeName.trim(),
+        technicianName: primary.name,
+        assigneeId: primary.userId || null,
+        assigneeName: primary.name,
+        assignees: normalizedAssignees,
         scheduledDate,
         scheduledTime,
+        initialScheduledDate: scheduledDate,
+        initialScheduledTime: scheduledTime || null,
+        scheduleLog: [],
         reminderAt: reminderAt ? reminderAt.toISOString() : null,
         notificationId,
-        calendarEventId,
+        calendarEventId: null,
         arrivalTime: arrivalAt
           ? `${String(arrivalAt.getHours()).padStart(2, '0')}:${String(arrivalAt.getMinutes()).padStart(2, '0')}`
           : '',
         departureTime: departureAt
           ? `${String(departureAt.getHours()).padStart(2, '0')}:${String(departureAt.getMinutes()).padStart(2, '0')}`
           : '',
-        workPerformed: workPerformed.trim(),
-        partsUsed: partsUsed.trim(),
+        workReports: normalizedWorkReports,
+        workPerformed: workReportStorage.workPerformed,
+        partsUsed: workReportStorage.partsUsed,
         notes: notes.trim(),
         status,
         priority,
-        clientType,
-        personId,
-        companyId,
+        clientType: resolvedClientType,
+        personId: primaryContact.personId,
+        companyId: companyId || null,
         parentJobId: parentJob?.id ?? null,
       });
+
+      if (scheduledAt && addToCalendar && user) {
+        try {
+          await syncSingleJobToPhoneCalendar(job, user.$id, updateJobCard);
+        } catch {
+          // Job saved; calendar is optional.
+        }
+      }
+
       router.replace(`/job/${job.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save job card.';
@@ -376,315 +458,269 @@ export default function NewJobCardScreen() {
     }
   };
 
+  const screenTitle = parentJob ? 'Follow-up job card' : 'New job card';
+
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.referenceBanner}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.referenceLabel}>Reference</Text>
-            <Text style={styles.referenceValue}>{reference}</Text>
-          </View>
-          {parentJob ? (
-            <View style={styles.followUpBadge}>
-              <Ionicons name="link-outline" size={12} color={colors.black} />
-              <Text style={styles.followUpText}>Follow-up of {parentJob.reference}</Text>
+    <SafeAreaView style={styles.safe} edges={['bottom']}>
+      <StackPageHeader title={screenTitle} />
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View ref={contentRef} collapsable={false}>
+            <View style={styles.referenceBanner}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.referenceLabel}>Reference</Text>
+                <Text style={styles.referenceValue}>{reference}</Text>
+              </View>
+              {parentJob ? (
+                <View style={styles.followUpBadge}>
+                  <Ionicons name="link-outline" size={12} color={colors.black} />
+                  <Text style={styles.followUpText}>Follow-up of {parentJob.reference}</Text>
+                </View>
+              ) : null}
             </View>
-          ) : null}
-        </View>
 
-        <FormSection title="Client">
-          <Pressable
-            onPress={() => setShowClients(true)}
-            style={({ pressed }) => [styles.clientCard, pressed && styles.pressed]}
-          >
-            <View style={styles.clientIcon}>
-              <Ionicons
-                name={
-                  clientType === 'person'
-                    ? 'person-outline'
-                    : clientType === 'company'
-                      ? 'business-outline'
-                      : 'search-outline'
-                }
-                size={20}
-                color={colors.black}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.clientLabel}>
-                {clientType === 'person' ? 'Person' : clientType === 'company' ? 'Company' : 'Tap to pick a client'}
-              </Text>
-              <Text style={styles.clientName}>
-                {selectedClientLabel || 'No client selected'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-down" size={18} color={colors.grey400} />
-          </Pressable>
-
-          {!clientType ? (
-            <FormField
-              label="Or enter client name"
-              value={clientName}
-              onChangeText={setClientName}
-              placeholder="e.g. Acme Industries"
-            />
-          ) : null}
-
-          <FormField
-            label="Site address"
-            value={siteAddress}
-            onChangeText={setSiteAddress}
-            placeholder="Street, city, postcode"
-          />
-          <View style={styles.inlineActions}>
-            <Pressable
-              onPress={useCurrentLocation}
-              disabled={resolvingAddress}
-              style={({ pressed }) => [styles.inlineBtn, pressed && styles.pressed]}
-            >
-              <Ionicons
-                name={resolvingAddress ? 'sync-outline' : 'locate-outline'}
-                size={14}
-                color={colors.black}
-              />
-              <Text style={styles.inlineBtnText}>
-                {resolvingAddress ? 'Locating…' : 'Use my location'}
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={openInMaps}
-              style={({ pressed }) => [styles.inlineBtn, pressed && styles.pressed]}
-            >
-              <Ionicons name="map-outline" size={14} color={colors.black} />
-              <Text style={styles.inlineBtnText}>Open in Maps</Text>
-            </Pressable>
-          </View>
-
-          <FormField
-            label="Site contact"
-            value={contactName}
-            onChangeText={setContactName}
-            placeholder="Contact person on site"
-          />
-          <FormField
-            label="Contact phone"
-            value={contactPhone}
-            onChangeText={setContactPhone}
-            placeholder="+961 ..."
-            keyboardType="phone-pad"
-          />
-          <Pressable
-            onPress={importContact}
-            disabled={contactsLoading}
-            style={({ pressed }) => [styles.inlineBtn, styles.inlineBtnFull, pressed && styles.pressed]}
-          >
-            <Ionicons
-              name={contactsLoading ? 'sync-outline' : 'people-outline'}
-              size={14}
-              color={colors.black}
-            />
-            <Text style={styles.inlineBtnText}>
-              {contactsLoading ? 'Loading…' : 'Import from contacts'}
-            </Text>
-          </Pressable>
-        </FormSection>
-
-        <FormSection title="Mission">
-          <Text style={styles.fieldLabel}>Mission type</Text>
-          <View style={styles.chipRow}>
-            {MISSION_TYPES.map((type) => {
-              const selected = missionType === type;
-              return (
+            <FormSection title="Client">
+              <Text style={styles.fieldLabel}>Company</Text>
+              <View ref={registerField('client')} collapsable={false}>
                 <Pressable
-                  key={type}
-                  onPress={() => setMissionType(type)}
-                  style={[styles.chip, selected && styles.chipSelected]}
+                  onPress={() => setShowCompanyPicker(true)}
+                  style={({ pressed }) => [
+                    styles.selector,
+                    errors.client ? styles.selectorError : null,
+                    pressed && styles.pressed,
+                  ]}
                 >
-                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{type}</Text>
+                  <Ionicons name="business-outline" size={18} color={colors.black} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.selectorText, !selectedCompany && styles.placeholder]}>
+                      {selectedCompany?.name ?? 'Pick a company or skip'}
+                    </Text>
+                    {selectedCompany?.industry ? (
+                      <Text style={styles.selectorHint}>{selectedCompany.industry}</Text>
+                    ) : null}
+                  </View>
+                  <Ionicons name="chevron-down" size={16} color={colors.grey400} />
                 </Pressable>
-              );
-            })}
-          </View>
-          <FormField
-            label="Equipment / system"
-            value={equipment}
-            onChangeText={setEquipment}
-            placeholder="e.g. Compressor unit #4"
-          />
-          <Text style={styles.fieldLabel}>
-            Technician <Text style={{ color: colors.error }}>*</Text>
-          </Text>
-          <Pressable
-            onPress={openAssigneePicker}
-            style={({ pressed }) => [styles.clientCard, pressed && styles.pressed]}
-          >
-            <View style={styles.clientIcon}>
-              <Ionicons name="construct-outline" size={18} color={colors.black} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.clientLabel}>Assignee</Text>
-              <Text style={styles.clientName}>
-                {assigneeName || 'Tap to pick a technician'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-down" size={18} color={colors.grey400} />
-          </Pressable>
-          <DateTimeField
-            label="Scheduled date & time"
-            value={scheduledAt}
-            onChange={setScheduledAt}
-            mode="datetime"
-            icon="calendar-outline"
-          />
+                {errors.client ? <Text style={styles.errorText}>{errors.client}</Text> : null}
+              </View>
 
-          <Text style={styles.fieldLabel}>Reminder</Text>
-          <View style={styles.chipRow}>
-            {REMINDER_OPTIONS.map((opt) => {
-              const selected = reminderMinutes === opt.value;
-              return (
+              {!hasLinkedClient ? (
+                <FormField
+                  label="Or enter client name"
+                  value={manualClientName}
+                  onChangeText={(text) => {
+                    setManualClientName(text);
+                    setClientName(text);
+                    if (errors.clientName) setErrors((prev) => ({ ...prev, clientName: undefined }));
+                  }}
+                  error={errors.clientName}
+                  anchorRef={registerField('clientName')}
+                  required
+                  placeholder="e.g. Acme Industries"
+                />
+              ) : (
+                <View style={styles.clientSummary}>
+                  <Text style={styles.clientSummaryLabel}>Client on job card</Text>
+                  <Text style={styles.clientSummaryValue}>{displayClientName || '—'}</Text>
+                </View>
+              )}
+
+              <ContactAddressesField values={siteAddresses} onChange={setSiteAddresses} />
+
+              <JobContactsField
+                values={jobContacts}
+                onChange={setJobContacts}
+                linkedPersons={linkedPersons}
+                allPersons={persons}
+                companyId={companyId || undefined}
+              />
+              <Pressable
+                onPress={importContact}
+                disabled={contactsLoading}
+                style={({ pressed }) => [styles.inlineBtn, styles.inlineBtnFull, pressed && styles.pressed]}
+              >
+                <Ionicons
+                  name={contactsLoading ? 'sync-outline' : 'people-outline'}
+                  size={14}
+                  color={colors.black}
+                />
+                <Text style={styles.inlineBtnText}>
+                  {contactsLoading ? 'Loading…' : 'Import from contacts'}
+                </Text>
+              </Pressable>
+            </FormSection>
+
+            <FormSection title="Mission">
+              <MissionTypesField
+                values={missionTypes}
+                onChange={(next) => {
+                  setMissionTypes(next);
+                  if (errors.missions) setErrors((prev) => ({ ...prev, missions: undefined }));
+                }}
+                error={errors.missions}
+                anchorRef={registerField('missions')}
+              />
+              <FormField
+                label="Equipment / system"
+                value={equipment}
+                onChangeText={setEquipment}
+                placeholder="e.g. Compressor unit #4"
+              />
+
+              <JobAssigneesField
+                values={assignees}
+                onChange={(next) => {
+                  setAssignees(next);
+                  if (errors.assignees) setErrors((prev) => ({ ...prev, assignees: undefined }));
+                }}
+                personnel={personnel}
+                personnelLoading={personnelLoading}
+                onLoadPersonnel={() => loadPersonnel()}
+                error={errors.assignees}
+                anchorRef={registerField('assignees')}
+              />
+
+              <DateTimeField
+                label="Scheduled date & time"
+                value={scheduledAt}
+                onChange={setScheduledAt}
+                mode="datetime"
+                icon="calendar-outline"
+              />
+
+              <Text style={styles.fieldLabel}>Reminder</Text>
+              <View style={styles.chipRow}>
+                {REMINDER_OPTIONS.map((opt) => {
+                  const selected = reminderMinutes === opt.value;
+                  return (
+                    <Pressable
+                      key={opt.value}
+                      onPress={() => setReminderMinutes(opt.value)}
+                      style={[styles.chip, selected && styles.chipSelected]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
                 <Pressable
-                  key={opt.value}
-                  onPress={() => setReminderMinutes(opt.value)}
-                  style={[styles.chip, selected && styles.chipSelected]}
+                  onPress={() => setReminderMinutes(null)}
+                  style={[styles.chip, reminderMinutes === null && styles.chipSelected]}
                 >
-                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                    {opt.label}
+                  <Text style={[styles.chipText, reminderMinutes === null && styles.chipTextSelected]}>
+                    None
                   </Text>
                 </Pressable>
-              );
-            })}
-            <Pressable
-              onPress={() => setReminderMinutes(null)}
-              style={[styles.chip, reminderMinutes === null && styles.chipSelected]}
-            >
-              <Text style={[styles.chipText, reminderMinutes === null && styles.chipTextSelected]}>
-                None
-              </Text>
-            </Pressable>
-          </View>
+              </View>
 
-          <Pressable
-            onPress={() => setAddToCalendar((v) => !v)}
-            style={({ pressed }) => [styles.toggleRow, pressed && styles.pressed]}
-          >
-            <Ionicons
-              name={addToCalendar ? 'checkbox' : 'square-outline'}
-              size={20}
-              color={addToCalendar ? colors.primary : colors.grey400}
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.toggleLabel}>Add to phone calendar</Text>
-              <Text style={styles.toggleHint}>Sync this mission to your native calendar.</Text>
-            </View>
-          </Pressable>
-
-          <View style={styles.row}>
-            <View style={styles.half}>
-              <DateTimeField
-                label="Planned arrival"
-                value={arrivalAt}
-                onChange={setArrivalAt}
-                mode="time"
-                icon="time-outline"
-                placeholder="Pick time"
-              />
-            </View>
-            <View style={styles.half}>
-              <DateTimeField
-                label="Planned departure"
-                value={departureAt}
-                onChange={setDepartureAt}
-                mode="time"
-                icon="time-outline"
-                placeholder="Pick time"
-              />
-            </View>
-          </View>
-        </FormSection>
-
-        <FormSection title="Work report">
-          <FormField
-            label="Work performed"
-            value={workPerformed}
-            onChangeText={setWorkPerformed}
-            placeholder="Describe diagnostics, repairs, and actions taken..."
-            multiline
-          />
-          <FormField
-            label="Parts used"
-            value={partsUsed}
-            onChangeText={setPartsUsed}
-            placeholder="List parts and quantities"
-            multiline
-          />
-          <FormField
-            label="Additional notes"
-            value={notes}
-            onChangeText={setNotes}
-            placeholder="Follow-up required, observations..."
-            multiline
-          />
-        </FormSection>
-
-        <FormSection title="Status & priority">
-          <Text style={styles.fieldLabel}>Status</Text>
-          <StatusPicker value={status} onChange={setStatus} />
-          <Text style={[styles.fieldLabel, styles.priorityLabel]}>Priority</Text>
-          <View style={styles.chipRow}>
-            {PRIORITIES.map((level) => {
-              const selected = priority === level;
-              return (
-                <Pressable
-                  key={level}
-                  onPress={() => setPriority(level)}
-                  style={[styles.chip, selected && styles.chipSelected]}
-                >
-                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                    {JOB_PRIORITY_LABELS[level]}
+              <Pressable
+                onPress={() => setAddToCalendar((v) => !v)}
+                style={({ pressed }) => [styles.toggleRow, pressed && styles.pressed]}
+              >
+                <Ionicons
+                  name={addToCalendar ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={addToCalendar ? colors.primary : colors.grey400}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.toggleLabel}>Add to phone calendar</Text>
+                  <Text style={styles.toggleHint}>
+                    {phoneCalendarSyncActive
+                      ? 'Schedule sync is active — leave off to avoid duplicates, or sync from Schedule.'
+                      : 'Adds one event now. Schedule sync updates the same event later.'}
                   </Text>
-                </Pressable>
-              );
-            })}
+                </View>
+              </Pressable>
+
+              <View style={styles.row}>
+                <View style={styles.half}>
+                  <DateTimeField
+                    label="Planned arrival"
+                    value={arrivalAt}
+                    onChange={setArrivalAt}
+                    mode="time"
+                    icon="time-outline"
+                    placeholder="Pick time"
+                  />
+                </View>
+                <View style={styles.half}>
+                  <DateTimeField
+                    label="Planned departure"
+                    value={departureAt}
+                    onChange={setDepartureAt}
+                    mode="time"
+                    icon="time-outline"
+                    placeholder="Pick time"
+                  />
+                </View>
+              </View>
+            </FormSection>
+
+            <FormSection title="Work report">
+              <JobWorkReportsField values={workReports} onChange={setWorkReports} />
+              <FormField
+                label="Additional notes"
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Follow-up required, observations..."
+                multiline
+              />
+            </FormSection>
+
+            <FormSection title="Status & priority">
+              <Text style={styles.fieldLabel}>Status</Text>
+              <StatusPicker value={status} onChange={setStatus} />
+              <Text style={[styles.fieldLabel, styles.priorityLabel]}>Priority</Text>
+              <View style={styles.chipRow}>
+                {PRIORITIES.map((level) => {
+                  const selected = priority === level;
+                  return (
+                    <Pressable
+                      key={level}
+                      onPress={() => setPriority(level)}
+                      style={[styles.chip, selected && styles.chipSelected]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        {JOB_PRIORITY_LABELS[level]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </FormSection>
+
+            <PrimaryButton
+              label={saving ? 'Saving…' : 'Save Job Card'}
+              icon="save-outline"
+              onPress={handleSave}
+              disabled={saving}
+            />
           </View>
-        </FormSection>
-
-        <PrimaryButton
-          label={saving ? 'Saving…' : 'Save Job Card'}
-          icon="save-outline"
-          onPress={handleSave}
-          disabled={saving}
-        />
-      </ScrollView>
-
-      <ClientsSidebar
-        visible={showClients}
-        onClose={() => setShowClients(false)}
-        pickerMode
-        onPick={handlePick}
-      />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       <PickerSheet
-        visible={showAssigneePicker}
-        title="Pick technician"
-        loading={personnelLoading}
-        options={personnel.map((p) => {
-          const hintParts = [p.position, p.labels.includes('admin') ? 'Admin' : null].filter(Boolean);
-          return {
-            id: p.id,
-            label: p.name || p.email,
-            hint: hintParts.length ? hintParts.join(' · ') : p.email,
-            icon: 'person-circle-outline',
-          };
-        })}
-        emptyLabel="No personnel found. Create accounts in Admin."
-        searchPlaceholder="Search by name or email"
-        onClose={() => setShowAssigneePicker(false)}
+        visible={showCompanyPicker}
+        title="Pick company"
+        options={companyOptions}
+        searchPlaceholder="Search companies"
+        emptyLabel="No companies yet."
+        onClose={() => setShowCompanyPicker(false)}
         onSelect={(opt) => {
-          setAssigneeId(opt.id);
-          setAssigneeName(opt.label);
+          if (!opt.id) {
+            applyCompany(undefined);
+          } else {
+            const company = findCompany(opt.id);
+            if (company) applyCompany(company);
+          }
         }}
       />
 
@@ -697,17 +733,21 @@ export default function NewJobCardScreen() {
         onClose={() => setShowContactsPicker(false)}
         onSelect={onPickContact}
       />
-    </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
+  safe: {
     flex: 1,
     backgroundColor: colors.background,
   },
+  flex: {
+    flex: 1,
+  },
   content: {
     padding: spacing.lg,
+    gap: spacing.sm,
     paddingBottom: spacing.xxl,
   },
   referenceBanner: {
@@ -742,35 +782,55 @@ const styles = StyleSheet.create({
     borderColor: colors.primaryDark,
   },
   followUpText: { ...typography.caption, color: colors.black, fontSize: 11, fontWeight: '600' },
-  clientCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    padding: spacing.md,
-    backgroundColor: colors.white,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.grey200,
-    marginBottom: spacing.md,
-  },
-  clientIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.grey100,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  clientLabel: { ...typography.caption, color: colors.grey600 },
-  clientName: { ...typography.subheading, color: colors.black, fontSize: 15 },
   fieldLabel: {
     ...typography.label,
     color: colors.grey600,
     marginBottom: spacing.sm,
   },
-  priorityLabel: {
-    marginTop: spacing.md,
+  subLabel: {
+    ...typography.caption,
+    color: colors.grey600,
+    marginBottom: spacing.sm,
+    fontWeight: '600',
   },
+  requiredMark: {
+    color: colors.error,
+  },
+  selector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    borderRadius: radius.md,
+    marginBottom: spacing.md,
+  },
+  selectorError: {
+    borderColor: colors.error,
+    backgroundColor: colors.errorLight,
+  },
+  selectorText: { ...typography.body, color: colors.black, fontSize: 15, textAlign: 'left' },
+  selectorHint: { ...typography.caption, color: colors.grey600, fontSize: 12, marginTop: 2 },
+  placeholder: { color: colors.grey400 },
+  errorText: {
+    ...typography.caption,
+    color: colors.error,
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+  },
+  clientSummary: {
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.grey100,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    marginBottom: spacing.md,
+  },
+  clientSummaryLabel: { ...typography.caption, color: colors.grey600, marginBottom: 4 },
+  clientSummaryValue: { ...typography.subheading, color: colors.black, fontSize: 15 },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -797,6 +857,9 @@ const styles = StyleSheet.create({
     color: colors.black,
     fontWeight: '700',
   },
+  priorityLabel: {
+    marginTop: spacing.md,
+  },
   row: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -817,12 +880,6 @@ const styles = StyleSheet.create({
   },
   toggleLabel: { ...typography.subheading, color: colors.black, fontSize: 14 },
   toggleHint: { ...typography.caption, color: colors.grey600 },
-  inlineActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
-  },
   inlineBtn: {
     flexDirection: 'row',
     alignItems: 'center',

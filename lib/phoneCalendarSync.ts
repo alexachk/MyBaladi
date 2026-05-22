@@ -12,6 +12,7 @@ import { getLebanonHolidays, type LebanonHoliday, formatHolidayPhoneTitle } from
 
 const LOCAL_JOB_EVENTS_KEY = 'mybaladi.phoneCalendar.jobEvents';
 const HOLIDAY_EVENTS_KEY = 'mybaladi.phoneCalendar.holidayEvents';
+export const JOBS_SYNC_ACTIVE_KEY = 'mybaladi.phoneCalendar.jobsSyncActive';
 
 export type PhoneCalendarSyncResult = {
   jobsSynced: number;
@@ -159,6 +160,12 @@ async function resolveJobEventId(
   return job.calendarEventId ?? localEvents[job.id] ?? null;
 }
 
+function jobAlarmMinutesBefore(job: JobCard, startDate: Date): number | undefined {
+  if (!job.reminderAt) return 60;
+  const minutes = Math.round((startDate.getTime() - new Date(job.reminderAt).getTime()) / 60000);
+  return minutes > 0 ? minutes : undefined;
+}
+
 async function upsertJobEvent(job: JobCard, existingEventId: string | null): Promise<string | null> {
   const startDate = jobStartDate(job);
   if (!startDate) return null;
@@ -168,7 +175,7 @@ async function upsertJobEvent(job: JobCard, existingEventId: string | null): Pro
     notes: jobEventNotes(job),
     location: job.siteAddress || undefined,
     startDate,
-    alarmMinutesBefore: 60,
+    alarmMinutesBefore: jobAlarmMinutesBefore(job, startDate),
   };
 
   if (existingEventId) {
@@ -211,6 +218,57 @@ async function upsertHolidayRange(
   return createAllDayCalendarEvent(payload);
 }
 
+export async function isPhoneCalendarJobsSyncActive(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(JOBS_SYNC_ACTIVE_KEY)) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export async function markPhoneCalendarJobsSyncActive(): Promise<void> {
+  await AsyncStorage.setItem(JOBS_SYNC_ACTIVE_KEY, 'true');
+}
+
+export async function clearPhoneCalendarJobsSyncActive(): Promise<void> {
+  await AsyncStorage.removeItem(JOBS_SYNC_ACTIVE_KEY);
+}
+
+async function persistJobCalendarEventId(
+  job: JobCard,
+  userId: string,
+  eventId: string,
+  updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>,
+): Promise<void> {
+  const owner = job.assigneeId ?? job.technicianId ?? '';
+  if (owner === userId) {
+    if (job.calendarEventId !== eventId) {
+      await updateJobCard(job.id, { calendarEventId: eventId });
+    }
+    return;
+  }
+  await saveLocalJobEvent(job.id, eventId);
+}
+
+export async function syncSingleJobToPhoneCalendar(
+  job: JobCard,
+  userId: string,
+  updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>,
+): Promise<string | null> {
+  if (!job.scheduledDate) return null;
+
+  const granted = await ensureCalendarPermission();
+  if (!granted) return null;
+
+  const localEvents = await loadLocalJobEvents();
+  const existingId = await resolveJobEventId(job, localEvents);
+  const eventId = await upsertJobEvent(job, existingId);
+  if (!eventId) return null;
+
+  await persistJobCalendarEventId(job, userId, eventId, updateJobCard);
+  return eventId;
+}
+
 export async function syncJobsToPhoneCalendar(
   jobs: JobCard[],
   userId: string,
@@ -229,14 +287,11 @@ export async function syncJobsToPhoneCalendar(
     if (!eventId) continue;
 
     jobsSynced += 1;
-    const owner = job.assigneeId ?? job.technicianId ?? '';
-    if (owner === userId) {
-      if (job.calendarEventId !== eventId) {
-        await updateJobCard(job.id, { calendarEventId: eventId });
-      }
-    } else {
-      await saveLocalJobEvent(job.id, eventId);
-    }
+    await persistJobCalendarEventId(job, userId, eventId, updateJobCard);
+  }
+
+  if (jobsSynced > 0) {
+    await markPhoneCalendarJobsSyncActive();
   }
 
   return { jobsSynced, permissionDenied: false };
@@ -308,6 +363,9 @@ export async function unsyncJobsFromPhoneCalendar(
   }
 
   await saveLocalJobEvents(localEvents);
+  if (jobsRemoved > 0) {
+    await clearPhoneCalendarJobsSyncActive();
+  }
   return jobsRemoved;
 }
 

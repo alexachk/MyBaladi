@@ -88,6 +88,7 @@ export const COLLECTIONS = [
       { type: 'string', key: 'technicianId', size: 36, required: true },
       { type: 'string', key: 'assigneeId', size: 36 },
       { type: 'string', key: 'assigneeName', size: 128 },
+      { type: 'string', key: 'assignees', size: 2000 },
       { type: 'string', key: 'scheduledDate', size: 32 },
       { type: 'string', key: 'arrivalTime', size: 16 },
       { type: 'string', key: 'departureTime', size: 16 },

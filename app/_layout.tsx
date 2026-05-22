@@ -77,7 +77,7 @@ function RootNavigator() {
         />
         <Stack.Screen
           name="job/new"
-          options={{ title: 'New Job Card', presentation: 'modal' }}
+          options={{ headerShown: false, title: 'New Job Card', presentation: 'modal' }}
         />
         <Stack.Screen name="job/[id]" options={{ title: 'Job Card' }} />
         <Stack.Screen name="job/sign/[id]" options={{ headerShown: false, presentation: 'modal' }} />

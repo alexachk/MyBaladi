@@ -8,6 +8,14 @@ export type ClientFormFieldErrors = {
   emails?: Record<string, string>;
 };
 
+export type JobFormFieldErrors = {
+  client?: string;
+  clientName?: string;
+  assignee?: string;
+  assignees?: string;
+  missions?: string;
+};
+
 export function emailFieldScrollKey(entryKey: string): string {
   return `email:${entryKey}`;
 }
@@ -27,6 +35,16 @@ export function clientFormErrorScrollKeys(
       }
     }
   }
+  return keys;
+}
+
+export function jobFormErrorScrollKeys(errors: JobFormFieldErrors): string[] {
+  const keys: string[] = [];
+  if (errors.client) keys.push('client');
+  if (errors.clientName) keys.push('clientName');
+  if (errors.assignee) keys.push('assignee');
+  if (errors.assignees) keys.push('assignees');
+  if (errors.missions) keys.push('missions');
   return keys;
 }
 

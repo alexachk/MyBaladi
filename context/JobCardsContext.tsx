@@ -275,11 +275,28 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     async (id: string, updates: Partial<JobCard>) => {
       const sessionUser = requireSession();
       const before = jobCards.find((j) => j.id === id);
-      await updateJobCardInAppwrite(id, updates);
+      const touchesPeopleBlob =
+        updates.assignees !== undefined ||
+        updates.jobContacts !== undefined ||
+        updates.missionTypes !== undefined;
+      const touchesScheduleBlob =
+        updates.scheduleLog !== undefined ||
+        updates.initialScheduledDate !== undefined ||
+        updates.initialScheduledTime !== undefined;
+      const payload =
+        before && touchesPeopleBlob && !touchesScheduleBlob
+          ? {
+              ...updates,
+              initialScheduledDate: before.initialScheduledDate,
+              initialScheduledTime: before.initialScheduledTime,
+              scheduleLog: before.scheduleLog,
+            }
+          : updates;
+      await updateJobCardInAppwrite(id, payload);
       let after: JobCard | undefined;
       setJobCards((prev) => {
         const next = prev.map((job) =>
-          job.id === id ? { ...job, ...updates, updatedAt: new Date().toISOString() } : job,
+          job.id === id ? { ...job, ...payload, updatedAt: new Date().toISOString() } : job,
         );
         after = next.find((j) => j.id === id);
         writeCache(next);
@@ -319,6 +336,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
             'departureTime',
             'workPerformed',
             'partsUsed',
+            'workReports',
             'notes',
             'status',
             'priority',

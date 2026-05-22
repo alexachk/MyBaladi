@@ -7,14 +7,27 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
+import { DateTimeField } from '../../components/DateTimeField';
 import { JobAttachments } from '../../components/JobAttachments';
 import { JobCommentsThread } from '../../components/JobCommentsThread';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { PriorityDot, StatusBadge, StatusPicker } from '../../components/StatusBadge';
-import { cancelReminder } from '../../lib/notifications';
+import { formatAssigneesDisplay } from '../../lib/jobAssignees';
+import { formatJobContactsDisplay } from '../../lib/jobContacts';
+import { cancelReminder, scheduleJobReminder } from '../../lib/notifications';
 import { removeCalendarEvent } from '../../lib/calendar';
+import {
+  buildRescheduleUpdates,
+  formatScheduleWhen,
+  jobScheduledAt,
+  reminderAtFromSchedule,
+  schedulePartsFromDate,
+  scheduleWasRescheduled,
+} from '../../lib/jobSchedule';
+import { syncSingleJobToPhoneCalendar } from '../../lib/phoneCalendarSync';
 import { colors, radius, shadow, spacing, typography } from '../../constants/theme';
 import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
@@ -44,6 +57,9 @@ export default function JobDetailScreen() {
 
   const job = useMemo(() => (id ? getJobCard(id) : undefined), [getJobCard, id]);
   const [updating, setUpdating] = useState(false);
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [rescheduleAt, setRescheduleAt] = useState<Date | null>(null);
+  const [rescheduleNote, setRescheduleNote] = useState('');
 
   const parent = job?.parentJobId ? jobCards.find((j) => j.id === job.parentJobId) : undefined;
   const followUps = useMemo(
@@ -114,6 +130,74 @@ export default function JobDetailScreen() {
         finishedAt: new Date().toISOString(),
         departureTime: job.departureTime || new Date().toTimeString().slice(0, 5),
       });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const openReschedule = () => {
+    setRescheduleAt(jobScheduledAt(job));
+    setRescheduleNote('');
+    setShowReschedule(true);
+  };
+
+  const handleReschedule = async () => {
+    if (!canEdit || !user || !rescheduleAt) return;
+    setUpdating(true);
+    try {
+      const { date, time } = schedulePartsFromDate(rescheduleAt);
+      const scheduleUpdates = buildRescheduleUpdates(
+        job,
+        date,
+        time,
+        { id: user.$id, name: user.name || user.email || 'User' },
+        rescheduleNote,
+      );
+
+      const previousScheduledAt = jobScheduledAt(job);
+      let notificationId = job.notificationId ?? null;
+      let nextReminderAt: string | null = job.reminderAt ?? null;
+      if (job.notificationId && job.reminderAt && previousScheduledAt) {
+        await cancelReminder(job.notificationId);
+        nextReminderAt = reminderAtFromSchedule(rescheduleAt, job.reminderAt, previousScheduledAt);
+        notificationId = nextReminderAt
+          ? await scheduleJobReminder({
+              jobReference: job.reference,
+              clientName: job.clientName,
+              fireAt: new Date(nextReminderAt),
+            })
+          : null;
+      }
+
+      await updateJobCard(job.id, {
+        ...scheduleUpdates,
+        reminderAt: nextReminderAt,
+        notificationId,
+        assignees: job.assignees,
+        jobContacts: job.jobContacts,
+        missionTypes: job.missionTypes,
+      });
+
+      const updatedJob = {
+        ...job,
+        ...scheduleUpdates,
+        reminderAt: nextReminderAt,
+        notificationId,
+      };
+
+      if (updatedJob.calendarEventId || updatedJob.scheduledDate) {
+        try {
+          await syncSingleJobToPhoneCalendar(updatedJob, user.$id, updateJobCard);
+        } catch {
+          // optional
+        }
+      }
+
+      setShowReschedule(false);
+      setRescheduleNote('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to reschedule.';
+      Alert.alert('Reschedule', message);
     } finally {
       setUpdating(false);
     }
@@ -204,10 +288,19 @@ export default function JobDetailScreen() {
         <View style={styles.heroMeta}>
           <View style={styles.metaBlock}>
             <Ionicons name="calendar-outline" size={16} color={colors.grey600} />
-            <Text style={styles.metaText}>
-              {formatDate(job.scheduledDate)}
-              {job.scheduledTime ? ` · ${job.scheduledTime}` : ''}
-            </Text>
+            <View>
+              <Text style={styles.metaText}>
+                {formatScheduleWhen(job.scheduledDate, job.scheduledTime)}
+              </Text>
+              {scheduleWasRescheduled(job) ? (
+                <Text style={styles.metaSubtext}>
+                  Initial · {formatScheduleWhen(
+                    job.initialScheduledDate || job.scheduledDate,
+                    job.initialScheduledTime ?? job.scheduledTime,
+                  )}
+                </Text>
+              ) : null}
+            </View>
           </View>
           <PriorityDot priority={job.priority} />
         </View>
@@ -254,17 +347,104 @@ export default function JobDetailScreen() {
       ) : null}
 
       <View style={styles.card}>
+        <View style={styles.cardHeaderRow}>
+          <Text style={[styles.cardTitle, styles.cardHeaderRowTitle]}>Schedule</Text>
+          {canEdit ? (
+            <Pressable
+              onPress={() => (showReschedule ? setShowReschedule(false) : openReschedule())}
+              style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]}
+            >
+              <Text style={styles.linkBtnText}>{showReschedule ? 'Cancel' : 'Reschedule'}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        <DetailRow
+          label="Planned"
+          value={formatScheduleWhen(job.scheduledDate, job.scheduledTime)}
+        />
+        <DetailRow
+          label="Initial date"
+          value={formatScheduleWhen(
+            job.initialScheduledDate || job.scheduledDate,
+            job.initialScheduledTime ?? job.scheduledTime,
+          )}
+        />
+
+        {showReschedule && canEdit ? (
+          <View style={styles.rescheduleForm}>
+            <DateTimeField
+              label="New date & time"
+              value={rescheduleAt}
+              onChange={setRescheduleAt}
+              mode="datetime"
+              icon="calendar-outline"
+            />
+            <View style={styles.noteField}>
+              <Text style={styles.detailLabel}>Reason (optional)</Text>
+              <TextInput
+                value={rescheduleNote}
+                onChangeText={setRescheduleNote}
+                placeholder="Client request, weather, etc."
+                placeholderTextColor={colors.grey400}
+                style={styles.noteInput}
+                multiline
+              />
+            </View>
+            <PrimaryButton
+              label="Save new schedule"
+              icon="checkmark-circle-outline"
+              onPress={handleReschedule}
+              disabled={updating || !rescheduleAt}
+            />
+          </View>
+        ) : null}
+
+        {job.scheduleLog?.length ? (
+          <View style={styles.historyBlock}>
+            <Text style={styles.historyTitle}>Schedule history</Text>
+            {[...(job.scheduleLog ?? [])].reverse().map((entry, index) => (
+              <View key={`${entry.at}-${index}`} style={styles.historyRow}>
+                <Text style={styles.historyWhen}>
+                  {formatScheduleWhen(entry.fromDate, entry.fromTime)}
+                  {' → '}
+                  {formatScheduleWhen(entry.toDate, entry.toTime)}
+                </Text>
+                <Text style={styles.historyMeta}>
+                  {entry.userName || 'User'} · {formatDate(entry.at)}
+                </Text>
+                {entry.note ? <Text style={styles.historyNote}>{entry.note}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.cardTitle}>Client & Site</Text>
         <DetailRow label="Address" value={job.siteAddress} />
-        <DetailRow label="Contact" value={job.contactName} />
-        <DetailRow label="Phone" value={job.contactPhone} />
+        <DetailRow
+          label="Contacts"
+          value={
+            job.jobContacts?.length
+              ? formatJobContactsDisplay(job.jobContacts)
+              : [job.contactName, job.contactPhone].filter(Boolean).join(' · ')
+          }
+        />
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Mission</Text>
-        <DetailRow label="Type" value={job.missionType} />
+        <DetailRow label="Types" value={job.missionType} />
         <DetailRow label="Equipment" value={job.equipment} />
-        <DetailRow label="Technician" value={job.technicianName} />
+        <DetailRow
+          label="Team"
+          value={
+            job.assignees?.length
+              ? formatAssigneesDisplay(job.assignees)
+              : job.technicianName
+          }
+        />
         <DetailRow
           label="On-site times"
           value={
@@ -285,8 +465,25 @@ export default function JobDetailScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Work report</Text>
-        <DetailRow label="Work performed" value={job.workPerformed} />
-        <DetailRow label="Parts used" value={job.partsUsed} />
+        {(job.workReports ?? []).length > 0 ? (
+          (job.workReports ?? []).map((entry, index) => (
+            <View
+              key={`${entry.title}-${index}`}
+              style={[styles.reportSection, index > 0 && styles.reportSectionBorder]}
+            >
+              {(job.workReports?.length ?? 0) > 1 ? (
+                <Text style={styles.reportTitle}>{entry.title}</Text>
+              ) : null}
+              <DetailRow label="Work performed" value={entry.workPerformed} />
+              <DetailRow label="Parts used" value={entry.partsUsed} />
+            </View>
+          ))
+        ) : (
+          <>
+            <DetailRow label="Work performed" value={job.workPerformed} />
+            <DetailRow label="Parts used" value={job.partsUsed} />
+          </>
+        )}
         <DetailRow label="Notes" value={job.notes} />
       </View>
 
@@ -454,6 +651,79 @@ const styles = StyleSheet.create({
     color: colors.black,
     marginBottom: spacing.md,
   },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  cardHeaderRowTitle: {
+    marginBottom: 0,
+  },
+  linkBtn: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  linkBtnText: {
+    ...typography.caption,
+    color: colors.info,
+    fontWeight: '700',
+  },
+  rescheduleForm: {
+    gap: spacing.md,
+    marginBottom: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.grey200,
+  },
+  noteField: {
+    gap: spacing.xs,
+  },
+  noteInput: {
+    ...typography.body,
+    color: colors.black,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  historyBlock: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.grey200,
+    gap: spacing.sm,
+  },
+  historyTitle: {
+    ...typography.label,
+    color: colors.grey600,
+  },
+  historyRow: {
+    gap: 2,
+    paddingVertical: spacing.xs,
+  },
+  historyWhen: {
+    ...typography.body,
+    color: colors.black,
+    fontWeight: '600',
+  },
+  historyMeta: {
+    ...typography.caption,
+    color: colors.grey600,
+  },
+  historyNote: {
+    ...typography.caption,
+    color: colors.grey600,
+    fontStyle: 'italic',
+  },
+  metaSubtext: {
+    ...typography.caption,
+    color: colors.grey600,
+    marginTop: 2,
+  },
   priorityTitle: {
     marginTop: spacing.lg,
   },
@@ -468,6 +738,20 @@ const styles = StyleSheet.create({
   detailValue: {
     ...typography.body,
     color: colors.black,
+  },
+  reportSection: {
+    gap: spacing.xs,
+  },
+  reportSectionBorder: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.grey200,
+  },
+  reportTitle: {
+    ...typography.subheading,
+    color: colors.black,
+    marginBottom: spacing.xs,
   },
   priorityRow: {
     flexDirection: 'row',

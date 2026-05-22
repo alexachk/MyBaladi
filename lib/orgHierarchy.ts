@@ -123,6 +123,20 @@ export function getManagerChainMembers(userId: string, members: OrgMember[]): Or
   return chain;
 }
 
+export function getManagerReadersForAssignees(
+  ownerId: string,
+  assigneeIds: string[],
+  members: OrgMember[],
+): string[] {
+  const ids = new Set<string>();
+  for (const id of getManagerChain(ownerId, members)) ids.add(id);
+  for (const assigneeId of assigneeIds) {
+    if (!assigneeId) continue;
+    for (const id of getManagerChain(assigneeId, members)) ids.add(id);
+  }
+  return [...ids];
+}
+
 export function getManagerReadersForJob(
   ownerId: string,
   assigneeId: string | null | undefined,
