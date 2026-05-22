@@ -1,5 +1,5 @@
 import { ID, Query } from 'react-native-appwrite';
-import { primaryAddressFromEntries } from '../clientAddresses';
+import { parseStoredAddressEntries, primaryAddressFromEntries } from '../clientAddresses';
 import {
   parseContactsBlob,
   serializeContactsBlob,
