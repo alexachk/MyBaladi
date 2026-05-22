@@ -25,8 +25,12 @@ const TYPE_META: Record<
   job_started: { icon: 'play-circle-outline', color: colors.info },
   job_finished: { icon: 'stop-circle-outline', color: colors.warning },
   job_signed: { icon: 'lock-closed-outline', color: colors.success },
+  job_completed: { icon: 'checkmark-circle-outline', color: colors.success },
   job_reopened: { icon: 'lock-open-outline', color: colors.warning },
   job_commented: { icon: 'chatbubble-outline', color: colors.info },
+  visit_rescheduled: { icon: 'calendar-outline', color: colors.warning },
+  visit_done: { icon: 'checkmark-done-outline', color: colors.success },
+  visit_added: { icon: 'add-circle-outline', color: colors.info },
 };
 
 interface NotificationsContentProps {

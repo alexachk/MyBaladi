@@ -29,7 +29,13 @@ import {
   HOLIDAY_TENTATIVE_NOTE,
 } from '../../lib/lebanonHolidays';
 import { syncPhoneCalendar, unsyncPhoneCalendar } from '../../lib/phoneCalendarSync';
-import { compareJobSchedule, addDaysIso, isoDateParts } from '../../utils/calendarGrid';
+import {
+  jobHasVisitOnDate,
+  jobIsScheduled,
+  jobVisitDates,
+  visitOnDate,
+} from '../../lib/jobVisits';
+import { addDaysIso, isoDateParts } from '../../utils/calendarGrid';
 import { formatDate, todayIsoDate } from '../../utils/formatDate';
 import { memberAccentColor, memberAccentBg } from '../../utils/teamColors';
 import type { OrgMember } from '../../types/org';
@@ -50,9 +56,11 @@ function buildMarkersByDate(
 
   for (const job of jobs) {
     const owner = jobOwnerId(job) || job.technicianId;
-    if (!owner || !job.scheduledDate) continue;
-    if (!byDateOwner[job.scheduledDate]) byDateOwner[job.scheduledDate] = {};
-    byDateOwner[job.scheduledDate][owner] = (byDateOwner[job.scheduledDate][owner] ?? 0) + 1;
+    if (!owner) continue;
+    for (const date of jobVisitDates(job)) {
+      if (!byDateOwner[date]) byDateOwner[date] = {};
+      byDateOwner[date][owner] = (byDateOwner[date][owner] ?? 0) + 1;
+    }
   }
 
   const markers: Record<string, DayMarker[]> = {};
@@ -91,6 +99,17 @@ function scopeScheduledJobs(
   });
 }
 
+function dayJobsForDate(jobs: JobCard[], date: string): JobCard[] {
+  return jobs
+    .filter((job) => jobHasVisitOnDate(job, date))
+    .sort((a, b) => {
+      const av = visitOnDate(a, date);
+      const bv = visitOnDate(b, date);
+      if (av?.date !== bv?.date) return (av?.date ?? '').localeCompare(bv?.date ?? '');
+      return (av?.time ?? '99:99').localeCompare(bv?.time ?? '99:99');
+    });
+}
+
 export default function CalendarScreen() {
   const { width: pageWidth } = useWindowDimensions();
   const pagerRef = useRef<ScrollView>(null);
@@ -110,7 +129,7 @@ export default function CalendarScreen() {
   const [phoneSyncing, setPhoneSyncing] = useState(false);
 
   const scheduledJobs = useMemo(
-    () => jobCards.filter((j) => Boolean(j.scheduledDate)),
+    () => jobCards.filter((j) => jobIsScheduled(j)),
     [jobCards],
   );
 
@@ -167,10 +186,7 @@ export default function CalendarScreen() {
   };
 
   const dayJobs = useMemo(
-    () =>
-      scopedJobs
-        .filter((j) => j.scheduledDate === selectedDate)
-        .sort(compareJobSchedule),
+    () => dayJobsForDate(scopedJobs, selectedDate),
     [scopedJobs, selectedDate],
   );
 
@@ -584,10 +600,7 @@ function ScheduleScopePage({
   );
 
   const dayJobs = useMemo(
-    () =>
-      scopedJobs
-        .filter((j) => j.scheduledDate === selectedDate)
-        .sort(compareJobSchedule),
+    () => dayJobsForDate(scopedJobs, selectedDate),
     [scopedJobs, selectedDate],
   );
 
@@ -751,6 +764,7 @@ function ScheduleScopePage({
               <CalendarJobRow
                 key={job.id}
                 job={job}
+                visitDate={selectedDate}
                 isOwn={isOwn}
                 accentColor={accent}
                 ownerLabel={memberName(teamMembers, owner)}

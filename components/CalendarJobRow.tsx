@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
+import { visitOnDate } from '../lib/jobVisits';
 import { memberAccentBg } from '../utils/teamColors';
 import { JobCard } from '../types/jobCard';
 import { StatusBadge } from './StatusBadge';
 
 interface CalendarJobRowProps {
   job: JobCard;
+  visitDate?: string;
   ownerLabel?: string;
   isOwn: boolean;
   accentColor?: string;
@@ -15,13 +17,15 @@ interface CalendarJobRowProps {
 
 export function CalendarJobRow({
   job,
+  visitDate,
   ownerLabel,
   isOwn,
   accentColor,
   onPress,
 }: CalendarJobRowProps) {
-  const time = job.scheduledTime ?? '—';
-  const past = job.scheduledDate < new Date().toISOString().slice(0, 10);
+  const visit = visitDate ? visitOnDate(job, visitDate) : null;
+  const time = visit?.time ?? job.scheduledTime ?? '—';
+  const past = (visitDate ?? job.scheduledDate) < new Date().toISOString().slice(0, 10);
   const accent = accentColor ?? colors.primary;
 
   return (
@@ -55,6 +59,7 @@ export function CalendarJobRow({
           {job.clientName}
         </Text>
         <Text style={styles.meta} numberOfLines={1}>
+          {visit?.label ? `${visit.label} · ` : ''}
           {job.missionType || 'Mission'} · {job.siteAddress || 'No address'}
         </Text>
         <StatusBadge status={job.status} />

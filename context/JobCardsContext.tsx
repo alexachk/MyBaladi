@@ -23,7 +23,7 @@ import {
   getDirectReports,
   getVisibleUserIds,
 } from '../lib/orgHierarchy';
-import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated } from '../lib/notifyEvents';
+import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated, notifyVisitScheduleEvents } from '../lib/notifyEvents';
 import { clearCredentials } from '../lib/biometric';
 import { JobCard } from '../types/jobCard';
 import type { OrgMember } from '../types/org';
@@ -278,20 +278,31 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       const touchesPeopleBlob =
         updates.assignees !== undefined ||
         updates.jobContacts !== undefined ||
-        updates.missionTypes !== undefined;
+        updates.missionTypes !== undefined ||
+        updates.equipmentItems !== undefined;
       const touchesScheduleBlob =
         updates.scheduleLog !== undefined ||
         updates.initialScheduledDate !== undefined ||
-        updates.initialScheduledTime !== undefined;
+        updates.initialScheduledTime !== undefined ||
+        updates.visits !== undefined;
       const payload =
-        before && touchesPeopleBlob && !touchesScheduleBlob
+        before && touchesScheduleBlob && !touchesPeopleBlob
           ? {
               ...updates,
-              initialScheduledDate: before.initialScheduledDate,
-              initialScheduledTime: before.initialScheduledTime,
-              scheduleLog: before.scheduleLog,
+              assignees: before.assignees,
+              jobContacts: before.jobContacts,
+              missionTypes: before.missionTypes,
+              equipmentItems: before.equipmentItems,
             }
-          : updates;
+          : before && touchesPeopleBlob && !touchesScheduleBlob
+            ? {
+                ...updates,
+                initialScheduledDate: before.initialScheduledDate,
+                initialScheduledTime: before.initialScheduledTime,
+                scheduleLog: before.scheduleLog,
+                visits: before.visits,
+              }
+            : updates;
       await updateJobCardInAppwrite(id, payload);
       let after: JobCard | undefined;
       setJobCards((prev) => {
@@ -311,9 +322,12 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
         const finishedNow = !before.finishedAt && after.finishedAt;
         const lockedNow = !before.lockedAt && after.lockedAt;
         const unlockedNow = before.lockedAt && !after.lockedAt;
+        const completedNow = before.status !== 'completed' && after.status === 'completed';
 
         if (lockedNow) {
           notifyJobLifecycle(after, 'signed', actor).catch(() => undefined);
+        } else if (completedNow) {
+          notifyJobLifecycle(after, 'completed', actor).catch(() => undefined);
         } else if (unlockedNow) {
           notifyJobLifecycle(after, 'reopened', actor).catch(() => undefined);
         } else if (finishedNow) {
@@ -321,6 +335,23 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
         } else if (startedNow) {
           notifyJobLifecycle(after, 'started', actor).catch(() => undefined);
         } else {
+          const newScheduleEntries = (after.scheduleLog ?? []).slice((before.scheduleLog ?? []).length);
+          if (newScheduleEntries.length) {
+            notifyVisitScheduleEvents(after, actor, newScheduleEntries).catch(() => undefined);
+          }
+
+          const scheduleOnlyFields = new Set([
+            'visits',
+            'scheduleLog',
+            'scheduledDate',
+            'scheduledTime',
+            'initialScheduledDate',
+            'initialScheduledTime',
+            'reminderAt',
+            'notificationId',
+            'calendarEventId',
+          ]);
+
           const watchFields: Array<keyof JobCard> = [
             'reference',
             'clientName',
@@ -329,14 +360,16 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
             'contactPhone',
             'missionType',
             'equipment',
+            'equipmentItems',
             'scheduledDate',
             'scheduledTime',
+            'visits',
             'reminderAt',
             'arrivalTime',
             'departureTime',
             'workPerformed',
             'partsUsed',
-            'workReports',
+            'workReport',
             'notes',
             'status',
             'priority',
@@ -344,12 +377,19 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
             'companyId',
             'photoIds',
             'documentIds',
+            'assignees',
+            'jobContacts',
+            'missionTypes',
           ];
           const changed = watchFields.filter(
             (k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]),
           );
-          if (changed.length) {
-            notifyJobUpdated(after, actor, changed).catch(() => undefined);
+          const meaningfulChanges =
+            newScheduleEntries.length > 0
+              ? changed.filter((field) => !scheduleOnlyFields.has(field))
+              : changed;
+          if (meaningfulChanges.length) {
+            notifyJobUpdated(after, actor, meaningfulChanges).catch(() => undefined);
           }
         }
       }

@@ -11,7 +11,9 @@ import {
   missionTypesForForm,
   primaryMissionType,
 } from '../jobMissions';
-import { initialSchedule, type StoredJobSchedule } from '../jobSchedule';
+import { type StoredJobSchedule } from '../jobSchedule';
+import { formatEquipmentDisplay, parseEquipmentFromField } from '../jobEquipment';
+import { parseStoredVisits, normalizeVisitsList, primaryVisitFields, migrateLegacyOnSiteToVisits, syncJobOnSiteFields } from '../jobVisits';
 import {
   formatPartsSummary,
   formatWorkSummary,
@@ -79,7 +81,16 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
   const missionTypes = people.missions.length
     ? people.missions
     : missionTypesForForm(str(doc.missionType));
-  const workReports = parseWorkReportsFromStorage(str(doc.workPerformed), str(doc.partsUsed));
+  const workReport = parseWorkReportsFromStorage(str(doc.workPerformed), str(doc.partsUsed));
+  const equipmentItems = people.equipment.length
+    ? people.equipment
+    : parseEquipmentFromField(str(doc.equipment));
+  const visitsRaw = people.schedule?.visits?.length
+    ? normalizeVisitsList(people.schedule.visits)
+    : parseStoredVisits(null, str(doc.scheduledDate), nullableStr(doc.scheduledTime));
+  const visits = migrateLegacyOnSiteToVisits(visitsRaw, str(doc.arrivalTime), str(doc.departureTime));
+  const onSite = syncJobOnSiteFields(visits);
+  const primaryVisit = primaryVisitFields(visits);
 
   return {
     id: doc.$id,
@@ -90,14 +101,15 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     contactPhone: str(doc.contactPhone),
     missionType: formatMissionTypesDisplay(missionTypes) || str(doc.missionType),
     missionTypes,
-    equipment: str(doc.equipment),
+    equipment: formatEquipmentDisplay(equipmentItems) || str(doc.equipment),
+    equipmentItems,
     technicianName: str(doc.technicianName),
-    scheduledDate: str(doc.scheduledDate),
-    arrivalTime: str(doc.arrivalTime),
-    departureTime: str(doc.departureTime),
-    workPerformed: formatWorkSummary(workReports) || str(doc.workPerformed),
-    partsUsed: formatPartsSummary(workReports) || str(doc.partsUsed),
-    workReports,
+    scheduledDate: primaryVisit.scheduledDate || str(doc.scheduledDate),
+    arrivalTime: onSite.arrivalTime || str(doc.arrivalTime),
+    departureTime: onSite.departureTime || str(doc.departureTime),
+    workPerformed: formatWorkSummary(workReport, visits) || str(doc.workPerformed),
+    partsUsed: formatPartsSummary(workReport, visits) || str(doc.partsUsed),
+    workReport,
     notes: str(doc.notes),
     status: doc.status,
     priority: doc.priority,
@@ -114,8 +126,9 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     initialScheduledDate: people.schedule?.initialDate || str(doc.scheduledDate) || null,
     initialScheduledTime: people.schedule?.initialTime ?? nullableStr(doc.scheduledTime),
     scheduleLog: people.schedule?.log ?? [],
+    visits,
     technicianId: nullableStr(doc.technicianId),
-    scheduledTime: nullableStr(doc.scheduledTime),
+    scheduledTime: primaryVisit.scheduledTime ?? nullableStr(doc.scheduledTime),
     reminderAt: nullableDate(doc.reminderAt),
     startedAt: nullableDate(doc.startedAt),
     finishedAt: nullableDate(doc.finishedAt),
@@ -149,16 +162,20 @@ function normalizeForWrite(
   if (job.clientType !== undefined) out.clientType = job.clientType ?? null;
   if (job.photoIds !== undefined) out.photoIds = job.photoIds ?? [];
   if (job.documentIds !== undefined) out.documentIds = job.documentIds ?? [];
-  if (job.workReports !== undefined) {
-    const stored = serializeWorkReportsToStorage(job.workReports);
+  if (job.workReport !== undefined) {
+    const stored = serializeWorkReportsToStorage(job.workReport);
     out.workPerformed = stored.workPerformed;
     out.partsUsed = stored.partsUsed;
   }
-  if (job.assignees !== undefined || job.jobContacts !== undefined || job.missionTypes !== undefined) {
+  if (job.equipmentItems !== undefined) {
+    out.equipment = formatEquipmentDisplay(job.equipmentItems).slice(0, 256);
+  }
+  if (job.assignees !== undefined || job.jobContacts !== undefined || job.missionTypes !== undefined || job.visits !== undefined || job.equipmentItems !== undefined) {
     out.assignees = serializeJobPeopleBlob({
       team: job.assignees ?? [],
       contacts: job.jobContacts ?? [],
       missions: job.missionTypes ?? missionTypesForForm(typeof job.missionType === 'string' ? job.missionType : ''),
+      equipment: job.equipmentItems ?? [],
       schedule: buildScheduleBlobForWrite(job),
     });
   }
@@ -180,25 +197,31 @@ function normalizeForWrite(
 }
 
 function buildScheduleBlobForWrite(job: Partial<JobCard>): StoredJobSchedule | undefined {
-  if (
+  const hasScheduleData =
+    job.visits !== undefined ||
     job.scheduleLog !== undefined ||
     job.initialScheduledDate !== undefined ||
-    job.initialScheduledTime !== undefined
-  ) {
-    const initialDate = job.initialScheduledDate || job.scheduledDate || '';
-    if (!initialDate) return undefined;
-    return {
-      initialDate,
-      initialTime: job.initialScheduledTime ?? job.scheduledTime ?? null,
-      log: job.scheduleLog ?? [],
-    };
-  }
+    job.initialScheduledTime !== undefined ||
+    job.scheduledDate !== undefined;
 
-  if (job.scheduledDate) {
-    return initialSchedule(job.scheduledDate, job.scheduledTime ?? null);
-  }
+  if (!hasScheduleData) return undefined;
 
-  return undefined;
+  const visits =
+    job.visits ??
+    parseStoredVisits(null, job.scheduledDate, job.scheduledTime ?? null);
+
+  if (!visits.length) return undefined;
+
+  const primary = primaryVisitFields(visits);
+  const initialDate = job.initialScheduledDate || primary.scheduledDate;
+  if (!initialDate) return undefined;
+
+  return {
+    initialDate,
+    initialTime: job.initialScheduledTime ?? primary.scheduledTime,
+    log: job.scheduleLog ?? [],
+    visits,
+  };
 }
 
 function userPermissions(userId: string, extraReaderIds: string[] = []) {

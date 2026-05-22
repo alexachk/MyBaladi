@@ -1,4 +1,5 @@
 import { normalizeMissionTypes } from './jobMissions';
+import { normalizeEquipmentEntries } from './jobEquipment';
 import { parseStoredAssignees, serializeAssignees, type StoredJobAssignee } from './jobAssignees';
 import { parseStoredJobContacts, type StoredJobContact } from './jobContacts';
 import { parseStoredSchedule, type StoredJobSchedule } from './jobSchedule';
@@ -7,13 +8,19 @@ export interface JobPeopleBlob {
   team: StoredJobAssignee[];
   contacts: StoredJobContact[];
   missions: string[];
+  equipment: string[];
   schedule?: StoredJobSchedule;
 }
 
-const EMPTY_BLOB: JobPeopleBlob = { team: [], contacts: [], missions: [] };
+const EMPTY_BLOB: JobPeopleBlob = { team: [], contacts: [], missions: [], equipment: [] };
 
 function needsPeopleWrapper(blob: JobPeopleBlob): boolean {
-  return blob.contacts.length > 0 || blob.missions.length > 1 || Boolean(blob.schedule);
+  return (
+    blob.contacts.length > 0 ||
+    blob.missions.length > 1 ||
+    blob.equipment.length > 0 ||
+    Boolean(blob.schedule)
+  );
 }
 
 export function parseJobPeopleBlob(raw: unknown): JobPeopleBlob {
@@ -28,7 +35,7 @@ export function parseJobPeopleBlob(raw: unknown): JobPeopleBlob {
     }
   }
   if (Array.isArray(raw)) {
-    return { team: parseStoredAssignees(raw), contacts: [], missions: [] };
+    return { team: parseStoredAssignees(raw), contacts: [], missions: [], equipment: [] };
   }
   if (typeof raw === 'object' && raw) {
     const row = raw as Record<string, unknown>;
@@ -40,6 +47,13 @@ export function parseJobPeopleBlob(raw: unknown): JobPeopleBlob {
           ? row.missions.filter((value): value is string => typeof value === 'string')
           : [],
       ),
+      equipment: Array.isArray(row.equipment)
+        ? normalizeEquipmentEntries(
+            row.equipment
+              .filter((value): value is string => typeof value === 'string')
+              .map((name) => ({ key: 'stored', name })),
+          )
+        : [],
       schedule: parseStoredSchedule(row.schedule),
     };
   }
@@ -62,6 +76,7 @@ export function serializeJobPeopleBlob(blob: JobPeopleBlob): string {
     contacts: blob.contacts,
     missions: blob.missions,
   };
+  if (blob.equipment.length) payload.equipment = blob.equipment;
   if (blob.schedule) payload.schedule = blob.schedule;
   return JSON.stringify(payload);
 }

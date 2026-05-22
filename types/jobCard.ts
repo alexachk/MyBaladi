@@ -2,6 +2,7 @@ import type { ClientType } from './client';
 import type { StoredJobAssignee } from '../lib/jobAssignees';
 import type { StoredJobContact } from '../lib/jobContacts';
 import type { ScheduleLogEntry } from '../lib/jobSchedule';
+import type { StoredJobVisit } from '../lib/jobVisits';
 import type { StoredWorkReport } from '../lib/jobWorkReports';
 
 export type JobStatus = 'draft' | 'in_progress' | 'completed' | 'pending_review';
@@ -18,16 +19,18 @@ export interface JobCard {
   missionType: string;
   missionTypes?: string[];
   equipment: string;
+  equipmentItems?: string[];
   technicianName: string;
   scheduledDate: string;
   initialScheduledDate?: string | null;
   initialScheduledTime?: string | null;
   scheduleLog?: ScheduleLogEntry[];
+  visits?: StoredJobVisit[];
   arrivalTime: string;
   departureTime: string;
   workPerformed: string;
   partsUsed: string;
-  workReports?: StoredWorkReport[];
+  workReport?: StoredWorkReport;
   notes: string;
   status: JobStatus;
   priority: JobPriority;

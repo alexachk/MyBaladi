@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { JobCard } from '../types/jobCard';
 import { addDaysIso } from '../utils/calendarGrid';
+import { formatEquipmentList } from './jobEquipment';
 import {
   createAllDayCalendarEvent,
   createCalendarEvent,
@@ -9,6 +10,16 @@ import {
   updateCalendarEvent,
 } from './calendar';
 import { getLebanonHolidays, type LebanonHoliday, formatHolidayPhoneTitle } from './lebanonHolidays';
+import {
+  collectVisitCalendarEventIds,
+  ensureVisitShape,
+  normalizeVisitsList,
+  patchVisitInList,
+  resolveVisitLocation,
+  visitToDate,
+  visitsForPhoneCalendar,
+  type StoredJobVisit,
+} from './jobVisits';
 
 const LOCAL_JOB_EVENTS_KEY = 'mybaladi.phoneCalendar.jobEvents';
 const HOLIDAY_EVENTS_KEY = 'mybaladi.phoneCalendar.holidayEvents';
@@ -76,24 +87,64 @@ function groupConsecutiveHolidays(holidays: LebanonHoliday[]): HolidayRange[] {
   return groups;
 }
 
-function jobStartDate(job: JobCard): Date | null {
-  if (!job.scheduledDate) return null;
-  const [y, m, d] = job.scheduledDate.split('-').map(Number);
-  if (job.scheduledTime) {
-    const [hh, mm] = job.scheduledTime.split(':').map(Number);
-    return new Date(y, m - 1, d, hh, mm);
-  }
-  return new Date(y, m - 1, d, 9, 0);
+function visitLocalEventKey(jobId: string, visitId: string): string {
+  return `${jobId}:${visitId}`;
 }
 
-function jobEventTitle(job: JobCard): string {
-  return `[${job.reference}] ${job.clientName}`;
+export function collectJobCalendarEventIds(job: JobCard): string[] {
+  const ids = new Set<string>();
+  if (job.calendarEventId?.trim()) ids.add(job.calendarEventId.trim());
+  for (const id of collectVisitCalendarEventIds(job.visits ?? [])) ids.add(id);
+  return [...ids];
+}
+
+function resolveVisitsForSync(job: JobCard): StoredJobVisit[] {
+  const visits = normalizeVisitsList(job.visits ?? []);
+  if (visits.length) return visits;
+  if (!job.scheduledDate) return [];
+  return [
+    ensureVisitShape({
+      date: job.scheduledDate,
+      time: job.scheduledTime ?? null,
+      status: 'scheduled',
+    }),
+  ];
+}
+
+function resolveVisitEventId(
+  job: JobCard,
+  visit: StoredJobVisit,
+  localEvents: Record<string, string>,
+): string | null {
+  if (visit.calendarEventId?.trim()) return visit.calendarEventId.trim();
+  const localKey = visitLocalEventKey(job.id, visit.id);
+  if (localEvents[localKey]) return localEvents[localKey];
+  const scheduled = visitsForPhoneCalendar(resolveVisitsForSync(job));
+  if (
+    job.calendarEventId?.trim() &&
+    scheduled.length === 1 &&
+    scheduled[0].id === visit.id
+  ) {
+    return job.calendarEventId.trim();
+  }
+  if (job.calendarEventId?.trim() && !job.visits?.length) {
+    return job.calendarEventId.trim();
+  }
+  return null;
+}
+
+function visitEventTitle(job: JobCard, visit: StoredJobVisit, index: number): string {
+  const label = visit.label?.trim() || `Visit ${index + 1}`;
+  return `[${job.reference}] ${job.clientName} · ${label}`;
 }
 
 function jobEventNotes(job: JobCard): string {
+  const equipmentText = job.equipmentItems?.length
+    ? formatEquipmentList(job.equipmentItems)
+    : job.equipment;
   const lines = [
     job.missionType,
-    job.equipment ? `Equipment: ${job.equipment}` : '',
+    equipmentText ? `Equipment:\n${equipmentText}` : '',
     job.assigneeName ? `Assignee: ${job.assigneeName}` : '',
     job.notes ? job.notes : '',
   ].filter(Boolean);
@@ -153,27 +204,25 @@ function resolveHolidayEventId(
   return null;
 }
 
-async function resolveJobEventId(
-  job: JobCard,
-  localEvents: Record<string, string>,
-): Promise<string | null> {
-  return job.calendarEventId ?? localEvents[job.id] ?? null;
-}
-
 function jobAlarmMinutesBefore(job: JobCard, startDate: Date): number | undefined {
   if (!job.reminderAt) return 60;
   const minutes = Math.round((startDate.getTime() - new Date(job.reminderAt).getTime()) / 60000);
   return minutes > 0 ? minutes : undefined;
 }
 
-async function upsertJobEvent(job: JobCard, existingEventId: string | null): Promise<string | null> {
-  const startDate = jobStartDate(job);
+async function upsertVisitEvent(
+  job: JobCard,
+  visit: StoredJobVisit,
+  index: number,
+  existingEventId: string | null,
+): Promise<string | null> {
+  const startDate = visitToDate(visit);
   if (!startDate) return null;
 
   const payload = {
-    title: jobEventTitle(job),
+    title: visitEventTitle(job, visit, index),
     notes: jobEventNotes(job),
-    location: job.siteAddress || undefined,
+    location: resolveVisitLocation(visit, job.siteAddress) || undefined,
     startDate,
     alarmMinutesBefore: jobAlarmMinutesBefore(job, startDate),
   };
@@ -234,20 +283,30 @@ export async function clearPhoneCalendarJobsSyncActive(): Promise<void> {
   await AsyncStorage.removeItem(JOBS_SYNC_ACTIVE_KEY);
 }
 
-async function persistJobCalendarEventId(
+async function persistVisitCalendarEventIds(
   job: JobCard,
+  visits: StoredJobVisit[],
   userId: string,
-  eventId: string,
+  localEvents: Record<string, string>,
   updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>,
 ): Promise<void> {
+  for (const visit of visits) {
+    const localKey = visitLocalEventKey(job.id, visit.id);
+    if (visit.calendarEventId) {
+      localEvents[localKey] = visit.calendarEventId;
+    } else {
+      delete localEvents[localKey];
+    }
+  }
+  delete localEvents[job.id];
+
   const owner = job.assigneeId ?? job.technicianId ?? '';
   if (owner === userId) {
-    if (job.calendarEventId !== eventId) {
-      await updateJobCard(job.id, { calendarEventId: eventId });
-    }
-    return;
+    await updateJobCard(job.id, {
+      visits,
+      calendarEventId: null,
+    });
   }
-  await saveLocalJobEvent(job.id, eventId);
 }
 
 export async function syncSingleJobToPhoneCalendar(
@@ -255,18 +314,55 @@ export async function syncSingleJobToPhoneCalendar(
   userId: string,
   updateJobCard: (id: string, updates: Partial<JobCard>) => Promise<void>,
 ): Promise<string | null> {
-  if (!job.scheduledDate) return null;
+  if (!job.scheduledDate && !job.visits?.length) return null;
 
   const granted = await ensureCalendarPermission();
   if (!granted) return null;
 
+  let visits = resolveVisitsForSync(job);
+  const scheduledVisits = visitsForPhoneCalendar(visits);
+  const scheduledIds = new Set(scheduledVisits.map((visit) => visit.id));
   const localEvents = await loadLocalJobEvents();
-  const existingId = await resolveJobEventId(job, localEvents);
-  const eventId = await upsertJobEvent(job, existingId);
-  if (!eventId) return null;
+  let synced = 0;
 
-  await persistJobCalendarEventId(job, userId, eventId, updateJobCard);
-  return eventId;
+  for (const visit of visits) {
+    if (scheduledIds.has(visit.id)) continue;
+    const staleEventId = resolveVisitEventId(job, visit, localEvents);
+    if (!staleEventId) continue;
+    await removeCalendarEvent(staleEventId);
+    visits = patchVisitInList(visits, visit.id, { calendarEventId: undefined });
+    delete localEvents[visitLocalEventKey(job.id, visit.id)];
+    if (job.calendarEventId === staleEventId) {
+      delete localEvents[job.id];
+    }
+  }
+
+  for (let index = 0; index < scheduledVisits.length; index += 1) {
+    const visit = scheduledVisits[index];
+    const existingId = resolveVisitEventId({ ...job, visits }, visit, localEvents);
+    const eventId = await upsertVisitEvent(job, visit, index, existingId);
+    if (!eventId) continue;
+    visits = patchVisitInList(visits, visit.id, { calendarEventId: eventId });
+    synced += 1;
+  }
+
+  if (synced === 0 && scheduledVisits.length === 0) {
+    const legacyId = job.calendarEventId ?? localEvents[job.id] ?? null;
+    if (legacyId) {
+      await removeCalendarEvent(legacyId);
+      delete localEvents[job.id];
+      const owner = job.assigneeId ?? job.technicianId ?? '';
+      if (owner === userId) {
+        await updateJobCard(job.id, { calendarEventId: null, visits });
+      }
+    }
+    await saveLocalJobEvents(localEvents);
+    return null;
+  }
+
+  await persistVisitCalendarEventIds(job, visits, userId, localEvents, updateJobCard);
+  await saveLocalJobEvents(localEvents);
+  return synced > 0 ? `synced-${synced}` : null;
 }
 
 export async function syncJobsToPhoneCalendar(
@@ -277,17 +373,12 @@ export async function syncJobsToPhoneCalendar(
   const granted = await ensureCalendarPermission();
   if (!granted) return { jobsSynced: 0, permissionDenied: true };
 
-  const scheduled = jobs.filter((j) => j.scheduledDate);
-  const localEvents = await loadLocalJobEvents();
+  const scheduled = jobs.filter((j) => j.scheduledDate || j.visits?.length);
   let jobsSynced = 0;
 
   for (const job of scheduled) {
-    const existingId = await resolveJobEventId(job, localEvents);
-    const eventId = await upsertJobEvent(job, existingId);
-    if (!eventId) continue;
-
-    jobsSynced += 1;
-    await persistJobCalendarEventId(job, userId, eventId, updateJobCard);
+    const result = await syncSingleJobToPhoneCalendar(job, userId, updateJobCard);
+    if (result) jobsSynced += 1;
   }
 
   if (jobsSynced > 0) {
@@ -345,21 +436,36 @@ export async function unsyncJobsFromPhoneCalendar(
   let jobsRemoved = 0;
 
   for (const job of jobs) {
-    const eventId = job.calendarEventId ?? localEvents[job.id];
-    if (!eventId || removedEventIds.has(eventId)) {
-      delete localEvents[job.id];
-      continue;
+    const eventIds = new Set(collectJobCalendarEventIds(job));
+    if (localEvents[job.id]) eventIds.add(localEvents[job.id]);
+    for (const [key, eventId] of Object.entries(localEvents)) {
+      if (key.startsWith(`${job.id}:`)) eventIds.add(eventId);
     }
 
-    await removeCalendarEvent(eventId);
-    removedEventIds.add(eventId);
-    jobsRemoved += 1;
+    if (!eventIds.size) continue;
+
+    for (const eventId of eventIds) {
+      if (removedEventIds.has(eventId)) continue;
+      await removeCalendarEvent(eventId);
+      removedEventIds.add(eventId);
+      jobsRemoved += 1;
+    }
 
     const owner = job.assigneeId ?? job.technicianId ?? '';
-    if (owner === userId && job.calendarEventId) {
-      await updateJobCard(job.id, { calendarEventId: null });
+    if (owner === userId && (job.calendarEventId || job.visits?.some((v) => v.calendarEventId))) {
+      const clearedVisits = normalizeVisitsList(job.visits ?? []).map((visit) =>
+        ensureVisitShape({ ...visit, calendarEventId: undefined }),
+      );
+      await updateJobCard(job.id, {
+        calendarEventId: null,
+        ...(clearedVisits.length ? { visits: clearedVisits } : {}),
+      });
     }
+
     delete localEvents[job.id];
+    for (const key of Object.keys(localEvents)) {
+      if (key.startsWith(`${job.id}:`)) delete localEvents[key];
+    }
   }
 
   await saveLocalJobEvents(localEvents);

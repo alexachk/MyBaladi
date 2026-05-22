@@ -1,52 +1,91 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { PickerSheet } from './PickerSheet';
+import { WorkReportEntryAttachments } from './WorkReportEntryAttachments';
 import { colors, radius, spacing, typography } from '../constants/theme';
+import { newContactKey } from '../lib/clientContact';
 import {
-  defaultWorkReportEntry,
-  type WorkReportEntry,
+  defaultWorkReportFormState,
+  type WorkReportFormState,
+  type WorkReportTextEntry,
+  type WorkReportVisitOption,
 } from '../lib/jobWorkReports';
 
 interface JobWorkReportsFieldProps {
-  values: WorkReportEntry[];
-  onChange: (values: WorkReportEntry[]) => void;
+  value: WorkReportFormState;
+  onChange: (value: WorkReportFormState) => void;
+  visitOptions?: WorkReportVisitOption[];
 }
 
-export function JobWorkReportsField({ values, onChange }: JobWorkReportsFieldProps) {
-  const rows = values.length > 0 ? values : [defaultWorkReportEntry()];
+function TextEntryList({
+  label,
+  addLabel,
+  placeholder,
+  rows,
+  visitOptions,
+  onChange,
+}: {
+  label: string;
+  addLabel: string;
+  placeholder: string;
+  rows: WorkReportTextEntry[];
+  visitOptions: WorkReportVisitOption[];
+  onChange: (rows: WorkReportTextEntry[]) => void;
+}) {
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const defaultVisitId = visitOptions.find((option) => option.id)?.id ?? null;
 
-  const updateRow = (index: number, patch: Partial<WorkReportEntry>) => {
+  const updateRow = (index: number, patch: Partial<WorkReportTextEntry>) => {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
 
   const removeRow = (index: number) => {
     const next = rows.filter((_, i) => i !== index);
-    onChange(next.length > 0 ? next : [defaultWorkReportEntry()]);
+    onChange(next.length > 0 ? next : [{
+      key: newContactKey('entry'),
+      text: '',
+      visitId: defaultVisitId,
+      photoIds: [],
+      documentIds: [],
+    }]);
   };
 
   const addRow = () => {
-    onChange([...rows, defaultWorkReportEntry(`Section ${rows.length + 1}`)]);
+    onChange([
+      ...rows,
+      {
+        key: newContactKey('entry'),
+        text: '',
+        visitId: defaultVisitId,
+        photoIds: [],
+        documentIds: [],
+      },
+    ]);
   };
 
+  const selectedVisitLabel = (visitId: string | null) =>
+    visitOptions.find((option) => option.id === visitId)?.label ?? visitOptions[0]?.label ?? 'General';
+
   return (
-    <View style={styles.wrap}>
+    <View style={styles.block}>
       <View style={styles.labelRow}>
-        <Text style={styles.label}>Work sections</Text>
-        <Pressable
-          onPress={addRow}
-          hitSlop={8}
-          style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}
-        >
+        <Text style={styles.label}>{label}</Text>
+        <Pressable onPress={addRow} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
           <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
-          <Text style={styles.addText}>Add section</Text>
+          <Text style={styles.addText}>{addLabel}</Text>
         </Pressable>
       </View>
-      <Text style={styles.hint}>Split work by area, system, or visit phase.</Text>
 
       <View style={styles.rows}>
         {rows.map((row, index) => (
           <View key={row.key} style={styles.card}>
             <View style={styles.cardTop}>
-              <Text style={styles.cardIndex}>Section {index + 1}</Text>
+              {rows.length > 1 ? (
+                <Text style={styles.rowIndex}>#{index + 1}</Text>
+              ) : (
+                <View />
+              )}
               {rows.length > 1 ? (
                 <Pressable
                   onPress={() => removeRow(index)}
@@ -58,55 +97,100 @@ export function JobWorkReportsField({ values, onChange }: JobWorkReportsFieldPro
               ) : null}
             </View>
 
-            <Text style={styles.fieldLabel}>Title (optional)</Text>
-            <TextInput
-              value={row.title}
-              onChangeText={(text) => updateRow(index, { title: text })}
-              placeholder="e.g. Rooftop unit, Electrical panel"
-              placeholderTextColor={colors.grey400}
-              style={styles.input}
-            />
+            {visitOptions.length > 1 ? (
+              <Pressable
+                onPress={() => setPickerIndex(index)}
+                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed]}
+              >
+                <Ionicons name="calendar-outline" size={14} color={colors.info} />
+                <Text style={styles.visitPickerText} numberOfLines={2}>
+                  {selectedVisitLabel(row.visitId)}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={colors.grey400} />
+              </Pressable>
+            ) : null}
 
-            <Text style={styles.fieldLabel}>Work performed</Text>
             <TextInput
-              value={row.workPerformed}
-              onChangeText={(text) => updateRow(index, { workPerformed: text })}
-              placeholder="Diagnostics, repairs, actions taken..."
+              value={row.text}
+              onChangeText={(text) => updateRow(index, { text })}
+              placeholder={placeholder}
               placeholderTextColor={colors.grey400}
               style={[styles.input, styles.multiline]}
               multiline
               textAlignVertical="top"
             />
 
-            <Text style={styles.fieldLabel}>Parts used</Text>
-            <TextInput
-              value={row.partsUsed}
-              onChangeText={(text) => updateRow(index, { partsUsed: text })}
-              placeholder="Parts and quantities for this section"
-              placeholderTextColor={colors.grey400}
-              style={[styles.input, styles.multiline]}
-              multiline
-              textAlignVertical="top"
+            <WorkReportEntryAttachments
+              photoIds={row.photoIds}
+              documentIds={row.documentIds}
+              onChange={(attachments) => updateRow(index, attachments)}
             />
           </View>
         ))}
       </View>
+
+      <PickerSheet
+        visible={pickerIndex !== null}
+        title="Link to visit"
+        compact
+        options={visitOptions.map((option) => ({
+          id: option.id ?? '__general__',
+          label: option.label,
+        }))}
+        onSelect={(option) => {
+          if (pickerIndex === null) return;
+          updateRow(pickerIndex, { visitId: option.id === '__general__' ? null : option.id });
+          setPickerIndex(null);
+        }}
+        onClose={() => setPickerIndex(null)}
+      />
+    </View>
+  );
+}
+
+export function JobWorkReportsField({ value, onChange, visitOptions = [] }: JobWorkReportsFieldProps) {
+  const state = value.workItems.length || value.partItems.length ? value : defaultWorkReportFormState();
+  const options = useMemo(
+    () =>
+      visitOptions.length
+        ? visitOptions
+        : [{ id: null, label: 'General (not linked to a visit)' }],
+    [visitOptions],
+  );
+
+  return (
+    <View style={styles.wrap}>
+      <TextEntryList
+        label="Work performed"
+        addLabel="Add entry"
+        placeholder="Diagnostics, repairs, actions taken..."
+        rows={state.workItems}
+        visitOptions={options}
+        onChange={(workItems) => onChange({ ...state, workItems })}
+      />
+      <TextEntryList
+        label="Parts used"
+        addLabel="Add part"
+        placeholder="Part name and quantity"
+        rows={state.partItems}
+        visitOptions={options}
+        onChange={(partItems) => onChange({ ...state, partItems })}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { marginBottom: spacing.md },
+  wrap: { gap: spacing.md, marginBottom: spacing.md },
+  block: { gap: spacing.sm },
   labelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.xs,
   },
   label: { ...typography.label, color: colors.grey600 },
   addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   addText: { ...typography.caption, color: colors.primary, fontWeight: '600' },
-  hint: { ...typography.caption, color: colors.grey600, marginBottom: spacing.sm },
   rows: { gap: spacing.sm },
   card: {
     backgroundColor: colors.white,
@@ -120,11 +204,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.xs,
   },
-  cardIndex: { ...typography.caption, color: colors.black, fontWeight: '700' },
+  rowIndex: { ...typography.caption, color: colors.grey600, fontWeight: '700' },
   removeBtn: { padding: 2 },
-  fieldLabel: { ...typography.caption, color: colors.grey600, marginTop: spacing.xs },
+  visitPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.infoLight,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 8,
+  },
+  visitPickerText: {
+    flex: 1,
+    ...typography.caption,
+    color: colors.black,
+    fontWeight: '600',
+  },
   input: {
     borderWidth: 1,
     borderColor: colors.grey200,
@@ -135,8 +232,6 @@ const styles = StyleSheet.create({
     color: colors.black,
     backgroundColor: colors.white,
   },
-  multiline: {
-    minHeight: 88,
-  },
+  multiline: { minHeight: 88 },
   pressed: { opacity: 0.85 },
 });

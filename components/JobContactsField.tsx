@@ -2,17 +2,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ContactEmailsField } from './ContactEmailsField';
+import { ContactPhonesField } from './ContactPhonesField';
+import { PickerSheet, type PickerOption } from './PickerSheet';
 import { colors, radius, spacing, typography } from '../constants/theme';
-import { clientPrimaryPhone } from '../lib/clientContact';
+import { clientPrimaryEmail, clientPrimaryPhone } from '../lib/clientContact';
 import {
   JOB_CONTACT_ROLES,
   defaultJobContactEntry,
   jobContactFromPerson,
+  jobContactRowHasContent,
   type JobContactEntry,
   type JobContactRole,
 } from '../lib/jobContacts';
+import type { VisitLinkOption } from '../lib/jobVisitLink';
 import type { Person } from '../types/client';
-import { PickerSheet, type PickerOption } from './PickerSheet';
 
 interface JobContactsFieldProps {
   values: JobContactEntry[];
@@ -20,6 +24,7 @@ interface JobContactsFieldProps {
   linkedPersons: Person[];
   allPersons: Person[];
   companyId?: string;
+  visitOptions?: VisitLinkOption[];
 }
 
 export function JobContactsField({
@@ -28,10 +33,13 @@ export function JobContactsField({
   linkedPersons,
   allPersons,
   companyId,
+  visitOptions = [],
 }: JobContactsFieldProps) {
   const rows = values.length > 0 ? values : [defaultJobContactEntry()];
   const [rolePickerIndex, setRolePickerIndex] = useState<number | null>(null);
   const [personPickerIndex, setPersonPickerIndex] = useState<number | null>(null);
+  const [visitPickerIndex, setVisitPickerIndex] = useState<number | null>(null);
+  const defaultVisitId = visitOptions.find((option) => option.id)?.id ?? null;
 
   const pickerPool = companyId && linkedPersons.length > 0 ? linkedPersons : allPersons;
   const usedPersonIds = useMemo(
@@ -46,7 +54,7 @@ export function JobContactsField({
         .map((p) => ({
           id: p.id,
           label: p.fullName,
-          hint: p.phone || p.email || undefined,
+          hint: clientPrimaryPhone(p) || clientPrimaryEmail(p) || undefined,
           icon: 'person-outline' as const,
         })),
     [pickerPool, usedPersonIds, rows, personPickerIndex],
@@ -57,18 +65,25 @@ export function JobContactsField({
     onChange(next);
   };
 
+  const patchRow = (index: number, patch: Partial<JobContactEntry>, unlinkPerson = false) => {
+    updateRow(index, unlinkPerson ? { ...patch, personId: undefined } : patch);
+  };
+
   const removeRow = (index: number) => {
     const next = rows.filter((_, i) => i !== index);
     onChange(next.length > 0 ? next : [defaultJobContactEntry()]);
   };
 
   const addManualRow = () => {
-    onChange([...rows, defaultJobContactEntry()]);
+    onChange([...rows, defaultJobContactEntry('', '', 'Site', undefined, defaultVisitId)]);
   };
+
+  const selectedVisitLabel = (visitId: string | null) =>
+    visitOptions.find((option) => option.id === visitId)?.label ?? visitOptions[0]?.label ?? 'General';
 
   const addFromPerson = (person: Person) => {
     if (usedPersonIds.has(person.id)) return;
-    const filled = rows.filter((row) => row.name.trim() || row.phone.trim() || row.personId);
+    const filled = rows.filter((row) => jobContactRowHasContent(row));
     onChange([...filled, jobContactFromPerson(person)]);
   };
 
@@ -161,21 +176,51 @@ export function JobContactsField({
               </View>
             ) : null}
 
-            <TextInput
-              value={row.name}
-              onChangeText={(text) => updateRow(index, { name: text, personId: undefined })}
-              placeholder="Contact name"
-              placeholderTextColor={colors.grey400}
-              style={styles.input}
-              autoCapitalize="words"
+            {visitOptions.length > 1 ? (
+              <Pressable
+                onPress={() => setVisitPickerIndex(index)}
+                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed]}
+              >
+                <Ionicons name="calendar-outline" size={14} color={colors.info} />
+                <Text style={styles.visitPickerText} numberOfLines={2}>
+                  {selectedVisitLabel(row.visitId)}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={colors.grey400} />
+              </Pressable>
+            ) : null}
+
+            <View style={styles.nameRow}>
+              <View style={styles.nameHalf}>
+                <Text style={styles.fieldLabel}>First name</Text>
+                <TextInput
+                  value={row.firstName}
+                  onChangeText={(text) => patchRow(index, { firstName: text }, true)}
+                  placeholder="First name"
+                  placeholderTextColor={colors.grey400}
+                  style={styles.input}
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={styles.nameHalf}>
+                <Text style={styles.fieldLabel}>Last name</Text>
+                <TextInput
+                  value={row.lastName}
+                  onChangeText={(text) => patchRow(index, { lastName: text }, true)}
+                  placeholder="Last name"
+                  placeholderTextColor={colors.grey400}
+                  style={styles.input}
+                  autoCapitalize="words"
+                />
+              </View>
+            </View>
+
+            <ContactPhonesField
+              values={row.phones}
+              onChange={(phones) => patchRow(index, { phones }, true)}
             />
-            <TextInput
-              value={row.phone}
-              onChangeText={(text) => updateRow(index, { phone: text, personId: undefined })}
-              placeholder="Phone number"
-              placeholderTextColor={colors.grey400}
-              keyboardType="phone-pad"
-              style={styles.input}
+            <ContactEmailsField
+              values={row.emails}
+              onChange={(emails) => patchRow(index, { emails }, true)}
             />
           </View>
         ))}
@@ -211,10 +256,7 @@ export function JobContactsField({
           const person = pickerPool.find((p) => p.id === opt.id);
           if (person) {
             updateRow(personPickerIndex, {
-              personId: person.id,
-              name: person.fullName,
-              phone: clientPrimaryPhone(person),
-              role: rows[personPickerIndex]?.role ?? 'Site',
+              ...jobContactFromPerson(person, rows[personPickerIndex]?.role ?? 'Site'),
             });
           }
           setPersonPickerIndex(null);
@@ -299,6 +341,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryLight,
   },
   linkedText: { ...typography.caption, color: colors.info, fontWeight: '600', fontSize: 11 },
+  visitPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 8,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primaryLight,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  visitPickerText: { ...typography.caption, color: colors.black, flex: 1, fontWeight: '600' },
+  nameRow: { flexDirection: 'row', gap: spacing.sm },
+  nameHalf: { flex: 1, gap: spacing.xs },
+  fieldLabel: { ...typography.caption, color: colors.grey600 },
   input: {
     borderWidth: 1,
     borderColor: colors.grey200,

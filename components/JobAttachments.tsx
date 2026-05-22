@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import {
   deleteAttachment,
+  getAttachmentName,
   getFilePreviewUrl,
   getFileViewUrl,
   uploadAttachment,
@@ -16,11 +17,31 @@ interface Props {
   photoIds: string[];
   documentIds: string[];
   disabled?: boolean;
+  embedded?: boolean;
   onChange: (next: { photoIds: string[]; documentIds: string[] }) => Promise<void>;
 }
 
-export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Props) {
+export function JobAttachments({ photoIds, documentIds, disabled, embedded, onChange }: Props) {
   const [busy, setBusy] = useState(false);
+  const [documentNames, setDocumentNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const id of documentIds) {
+        const name = await getAttachmentName(id);
+        if (cancelled || !name) continue;
+        setDocumentNames((prev) => (prev[id] ? prev : { ...prev, [id]: name }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [documentIds]);
+
+  const rememberDocumentName = (id: string, name: string) => {
+    setDocumentNames((prev) => ({ ...prev, [id]: name }));
+  };
 
   const handleAddPhoto = async () => {
     if (disabled) return;
@@ -83,20 +104,26 @@ export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Pr
     if (disabled) return;
     const result = await DocumentPicker.getDocumentAsync({
       type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.*', 'text/*'],
-      multiple: false,
+      multiple: true,
       copyToCacheDirectory: true,
     });
     if (result.canceled || !result.assets?.length) return;
-    const asset = result.assets[0];
+
     setBusy(true);
     try {
-      const id = await uploadAttachment({
-        uri: asset.uri,
-        name: asset.name,
-        type: asset.mimeType ?? 'application/octet-stream',
-        size: asset.size ?? 0,
-      });
-      await onChange({ photoIds, documentIds: [...documentIds, id] });
+      let nextPhotoIds = photoIds;
+      let nextDocumentIds = documentIds;
+      for (const asset of result.assets) {
+        const id = await uploadAttachment({
+          uri: asset.uri,
+          name: asset.name,
+          type: asset.mimeType ?? 'application/octet-stream',
+          size: asset.size ?? 0,
+        });
+        rememberDocumentName(id, asset.name);
+        nextDocumentIds = [...nextDocumentIds, id];
+      }
+      await onChange({ photoIds: nextPhotoIds, documentIds: nextDocumentIds });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Upload failed.';
       Alert.alert('Document', message);
@@ -129,6 +156,11 @@ export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Pr
         style: 'destructive',
         onPress: async () => {
           await onChange({ photoIds, documentIds: documentIds.filter((x) => x !== id) });
+          setDocumentNames((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
           await deleteAttachment(id);
         },
       },
@@ -137,8 +169,8 @@ export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Pr
 
   void Paths;
 
-  return (
-    <View style={styles.card}>
+  const content = (
+    <>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Photos & documents</Text>
         {busy ? <ActivityIndicator color={colors.primary} /> : null}
@@ -185,7 +217,7 @@ export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Pr
             >
               <Ionicons name="document-text-outline" size={18} color={colors.black} />
               <Text style={styles.docName} numberOfLines={1}>
-                {id}
+                {documentNames[id] ?? id}
               </Text>
               <Ionicons name="open-outline" size={16} color={colors.grey400} />
             </Pressable>
@@ -200,10 +232,16 @@ export function JobAttachments({ photoIds, documentIds, disabled, onChange }: Pr
       )}
 
       {!disabled ? (
-        <Text style={styles.hint}>Tip: long-press an item to remove it.</Text>
+        <Text style={styles.hint}>Camera, gallery, or files. Long-press to remove.</Text>
       ) : null}
-    </View>
+    </>
   );
+
+  if (embedded) {
+    return <View style={styles.embedded}>{content}</View>;
+  }
+
+  return <View style={styles.card}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -215,6 +253,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.sm,
   },
+  embedded: { gap: spacing.sm },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { ...typography.subheading, color: colors.black },
   subLabel: { ...typography.label, color: colors.grey600 },

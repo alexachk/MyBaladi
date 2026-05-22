@@ -16,7 +16,9 @@ import {
   type AddressLabel,
 } from '../lib/clientAddresses';
 import { MapPinPickerModal } from './MapPinPickerModal';
+import { OpenInMapsButton } from './OpenInMapsButton';
 import { PickerSheet } from './PickerSheet';
+import { canOpenMapsForAddressEntry, promptMapsForAddressEntry } from '../lib/maps';
 
 interface ContactAddressesFieldProps {
   values: AddressEntry[];
@@ -116,6 +118,13 @@ export function ContactAddressesField({ values, onChange }: ContactAddressesFiel
                 <Ionicons name="pin" size={12} color={colors.info} />
                 <Text style={styles.pinText}>Map pin saved</Text>
               </View>
+            ) : null}
+
+            {canOpenMapsForAddressEntry(row) ? (
+              <OpenInMapsButton
+                compact
+                onPress={() => promptMapsForAddressEntry(row)}
+              />
             ) : null}
           </View>
         ))}

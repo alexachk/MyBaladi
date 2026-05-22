@@ -16,9 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ContactAddressesField } from '../../components/ContactAddressesField';
 import { DateTimeField } from '../../components/DateTimeField';
 import { FormField, FormSection } from '../../components/FormField';
+import { JobEquipmentField } from '../../components/JobEquipmentField';
+import { JobAttachments } from '../../components/JobAttachments';
 import { JobAssigneesField } from '../../components/JobAssigneesField';
 import { JobContactsField } from '../../components/JobContactsField';
 import { JobWorkReportsField } from '../../components/JobWorkReportsField';
+import { JobVisitsField } from '../../components/JobVisitsField';
 import { MissionTypesField } from '../../components/MissionTypesField';
 import { PickerSheet, type PickerOption } from '../../components/PickerSheet';
 import { PrimaryButton } from '../../components/PrimaryButton';
@@ -29,11 +32,22 @@ import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { listPersonnel, type Personnel } from '../../lib/appwrite/adminUsers';
 import {
+  equipmentForForm,
+  formatEquipmentDisplay,
+  normalizeEquipmentEntries,
+  type EquipmentEntry,
+} from '../../lib/jobEquipment';
+import {
   addressEntriesForForm,
   defaultAddressEntry,
   prepareClientAddressesPayload,
   type AddressEntry,
 } from '../../lib/clientAddresses';
+import {
+  defaultEmailEntry,
+  defaultPhoneEntry,
+  parsePhoneString,
+} from '../../lib/clientContact';
 import {
   isPhoneCalendarJobsSyncActive,
   syncSingleJobToPhoneCalendar,
@@ -50,8 +64,10 @@ import {
   defaultJobContactEntry,
   jobContactFromPerson,
   jobContactsForForm,
+  jobContactRowHasContent,
   normalizeJobContactEntries,
   primaryJobContactFromEntries,
+  splitJobContactName,
   type JobContactEntry,
 } from '../../lib/jobContacts';
 import {
@@ -60,11 +76,23 @@ import {
   normalizeMissionTypes,
 } from '../../lib/jobMissions';
 import {
-  normalizeWorkReportEntries,
+  normalizeVisitEntries,
+  primaryVisitFields,
+  syncJobOnSiteFields,
+  visitToDate,
+  visitsForForm,
+  type JobVisitEntry,
+} from '../../lib/jobVisits';
+import {
+  buildVisitLinkOptionsFromFormEntries,
+} from '../../lib/jobVisitLink';
+import {
+  normalizeWorkReportForm,
   serializeWorkReportsToStorage,
-  workReportsForForm,
-  type WorkReportEntry,
+  workReportFormState,
+  type WorkReportFormState,
 } from '../../lib/jobWorkReports';
+import { formatScheduleWhen, schedulePartsFromDate } from '../../lib/jobSchedule';
 import { scheduleJobReminder } from '../../lib/notifications';
 import type { Company } from '../../types/client';
 import {
@@ -73,7 +101,7 @@ import {
   type JobStatus,
 } from '../../types/jobCard';
 import type { ClientType } from '../../types/client';
-import { generateReference, todayIsoDate } from '../../utils/formatDate';
+import { formatDateTime, generateReference, todayIsoDate } from '../../utils/formatDate';
 
 const REMINDER_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0, label: 'At start' },
@@ -162,23 +190,45 @@ export default function NewJobCardScreen() {
       ? [...parentJob.missionTypes]
       : missionTypesForForm(parentJob?.missionType),
   );
-  const [equipment, setEquipment] = useState(parentJob?.equipment ?? '');
+  const [equipmentEntries, setEquipmentEntries] = useState<EquipmentEntry[]>(() =>
+    equipmentForForm(parentJob?.equipmentItems, parentJob?.equipment),
+  );
   const [personnel, setPersonnel] = useState<Personnel[]>([]);
   const [personnelLoading, setPersonnelLoading] = useState(false);
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
 
-  const [scheduledAt, setScheduledAt] = useState<Date | null>(new Date());
+  const [visits, setVisits] = useState<JobVisitEntry[]>(() =>
+    visitsForForm(parentJob?.visits, parentJob?.scheduledDate, parentJob?.scheduledTime),
+  );
+  const visitLinkOptions = useMemo(
+    () =>
+      buildVisitLinkOptionsFromFormEntries(
+        visits
+          .filter((entry) => entry.scheduledAt)
+          .map((entry) => {
+            const { date, time } = schedulePartsFromDate(entry.scheduledAt!);
+            return {
+              key: entry.key,
+              label: entry.label.trim() || undefined,
+              when: formatScheduleWhen(date, time),
+            };
+          }),
+      ),
+    [visits],
+  );
+  const workReportVisitOptions = visitLinkOptions;
+  const [cardCreatedPreview] = useState(() => new Date());
   const [reminderMinutes, setReminderMinutes] = useState<number | null>(60);
   const [addToCalendar, setAddToCalendar] = useState(false);
   const [phoneCalendarSyncActive, setPhoneCalendarSyncActive] = useState(false);
-  const [arrivalAt, setArrivalAt] = useState<Date | null>(null);
-  const [departureAt, setDepartureAt] = useState<Date | null>(null);
-  const [workReports, setWorkReports] = useState<WorkReportEntry[]>(() =>
-    workReportsForForm(parentJob?.workReports, parentJob?.workPerformed, parentJob?.partsUsed),
+  const [workReport, setWorkReport] = useState<WorkReportFormState>(() =>
+    workReportFormState(parentJob?.workReport, parentJob?.workPerformed, parentJob?.partsUsed),
   );
   const [notes, setNotes] = useState(
     parentJob ? `Follow-up of ${parentJob.reference}.\n${parentJob.notes ?? ''}`.trim() : '',
   );
+  const [photoIds, setPhotoIds] = useState<string[]>([]);
+  const [documentIds, setDocumentIds] = useState<string[]>([]);
   const [status, setStatus] = useState<JobStatus>('draft');
   const [priority, setPriority] = useState<JobPriority>(parentJob?.priority ?? 'normal');
 
@@ -207,8 +257,12 @@ export default function NewJobCardScreen() {
     [companies],
   );
 
-  const hasLinkedClient = Boolean(companyId || jobContacts.some((c) => c.personId || c.name.trim()));
+  const hasLinkedClient = Boolean(companyId || jobContacts.some((c) => jobContactRowHasContent(c)));
   const displayClientName = selectedCompany?.name ?? clientName ?? manualClientName;
+  const jobSiteAddressPreview = useMemo(
+    () => prepareClientAddressesPayload(siteAddresses).address,
+    [siteAddresses],
+  );
 
   useEffect(() => {
     if (pendingScrollKeys.current.length === 0) return;
@@ -315,10 +369,27 @@ export default function NewJobCardScreen() {
     );
     if (!found) return;
     const phone = found.phoneNumbers?.[0]?.number?.replace(/\s+/g, ' ').trim() ?? '';
-    const name = found.name ?? '';
+    const email = found.emails?.[0]?.email?.trim().toLowerCase() ?? '';
+    const { firstName, lastName } = splitJobContactName(found.name ?? '');
     setJobContacts((prev) => {
-      const filled = prev.filter((row) => row.name.trim() || row.phone.trim() || row.personId);
-      return [...filled, defaultJobContactEntry(name, phone, filled.length === 0 ? 'Primary' : 'Site')];
+      const filled = prev.filter((row) => jobContactRowHasContent(row));
+      const entry = defaultJobContactEntry(
+        firstName,
+        lastName,
+        filled.length === 0 ? 'Primary' : 'Site',
+      );
+      return [
+        ...filled,
+        {
+          ...entry,
+          phones: phone
+            ? [{ ...defaultPhoneEntry(), ...parsePhoneString(phone) }]
+            : entry.phones,
+          emails: email
+            ? [{ ...defaultEmailEntry(), address: email }]
+            : entry.emails,
+        },
+      ];
     });
     const addr = found.addresses?.[0];
     const currentAddress = prepareClientAddressesPayload(siteAddresses).address;
@@ -364,8 +435,8 @@ export default function NewJobCardScreen() {
     const missionSummary = formatMissionTypesDisplay(normalizedMissionTypes);
     const primaryContact = primaryJobContactFromEntries(normalizedContacts);
     const primary = primaryAssigneeFromEntries(normalizedAssignees);
-    const normalizedWorkReports = normalizeWorkReportEntries(workReports);
-    const workReportStorage = serializeWorkReportsToStorage(normalizedWorkReports);
+    const normalizedWorkReport = normalizeWorkReportForm(workReport);
+    const workReportStorage = serializeWorkReportsToStorage(normalizedWorkReport);
     let resolvedClientType = clientType;
     let resolvedClientName = finalClientName;
     if (!companyId && primaryContact.personId) {
@@ -375,16 +446,14 @@ export default function NewJobCardScreen() {
 
     setSaving(true);
     try {
-      const scheduledDate = scheduledAt
-        ? `${scheduledAt.getFullYear()}-${String(scheduledAt.getMonth() + 1).padStart(2, '0')}-${String(scheduledAt.getDate()).padStart(2, '0')}`
-        : todayIsoDate();
-      const scheduledTime = scheduledAt
-        ? `${String(scheduledAt.getHours()).padStart(2, '0')}:${String(scheduledAt.getMinutes()).padStart(2, '0')}`
-        : '';
+      const normalizedVisits = normalizeVisitEntries(visits);
+      const onSite = syncJobOnSiteFields(normalizedVisits);
+      const { scheduledDate, scheduledTime } = primaryVisitFields(normalizedVisits);
+      const primaryVisitAt = normalizedVisits.length ? visitToDate(normalizedVisits[0]) : null;
 
       const reminderAt =
-        scheduledAt && reminderMinutes !== null
-          ? new Date(scheduledAt.getTime() - reminderMinutes * 60 * 1000)
+        primaryVisitAt && reminderMinutes !== null
+          ? new Date(primaryVisitAt.getTime() - reminderMinutes * 60 * 1000)
           : null;
 
       let notificationId: string | null = null;
@@ -401,6 +470,8 @@ export default function NewJobCardScreen() {
         }
       }
 
+      const normalizedEquipment = normalizeEquipmentEntries(equipmentEntries);
+
       const job = await addJobCard({
         reference,
         clientName: resolvedClientName,
@@ -410,26 +481,24 @@ export default function NewJobCardScreen() {
         jobContacts: normalizedContacts,
         missionType: missionSummary,
         missionTypes: normalizedMissionTypes,
-        equipment: equipment.trim(),
+        equipment: formatEquipmentDisplay(normalizedEquipment),
+        equipmentItems: normalizedEquipment,
         technicianName: primary.name,
         assigneeId: primary.userId || null,
         assigneeName: primary.name,
         assignees: normalizedAssignees,
-        scheduledDate,
+        scheduledDate: scheduledDate || todayIsoDate(),
         scheduledTime,
-        initialScheduledDate: scheduledDate,
+        initialScheduledDate: scheduledDate || todayIsoDate(),
         initialScheduledTime: scheduledTime || null,
         scheduleLog: [],
+        visits: normalizedVisits,
         reminderAt: reminderAt ? reminderAt.toISOString() : null,
         notificationId,
         calendarEventId: null,
-        arrivalTime: arrivalAt
-          ? `${String(arrivalAt.getHours()).padStart(2, '0')}:${String(arrivalAt.getMinutes()).padStart(2, '0')}`
-          : '',
-        departureTime: departureAt
-          ? `${String(departureAt.getHours()).padStart(2, '0')}:${String(departureAt.getMinutes()).padStart(2, '0')}`
-          : '',
-        workReports: normalizedWorkReports,
+        arrivalTime: onSite.arrivalTime,
+        departureTime: onSite.departureTime,
+        workReport: normalizedWorkReport,
         workPerformed: workReportStorage.workPerformed,
         partsUsed: workReportStorage.partsUsed,
         notes: notes.trim(),
@@ -439,9 +508,11 @@ export default function NewJobCardScreen() {
         personId: primaryContact.personId,
         companyId: companyId || null,
         parentJobId: parentJob?.id ?? null,
+        photoIds,
+        documentIds,
       });
 
-      if (scheduledAt && addToCalendar && user) {
+      if (addToCalendar && user) {
         try {
           await syncSingleJobToPhoneCalendar(job, user.$id, updateJobCard);
         } catch {
@@ -540,6 +611,7 @@ export default function NewJobCardScreen() {
                 linkedPersons={linkedPersons}
                 allPersons={persons}
                 companyId={companyId || undefined}
+                visitOptions={visitLinkOptions}
               />
               <Pressable
                 onPress={importContact}
@@ -567,12 +639,7 @@ export default function NewJobCardScreen() {
                 error={errors.missions}
                 anchorRef={registerField('missions')}
               />
-              <FormField
-                label="Equipment / system"
-                value={equipment}
-                onChangeText={setEquipment}
-                placeholder="e.g. Compressor unit #4"
-              />
+              <JobEquipmentField values={equipmentEntries} onChange={setEquipmentEntries} />
 
               <JobAssigneesField
                 values={assignees}
@@ -587,12 +654,18 @@ export default function NewJobCardScreen() {
                 anchorRef={registerField('assignees')}
               />
 
-              <DateTimeField
-                label="Scheduled date & time"
-                value={scheduledAt}
-                onChange={setScheduledAt}
-                mode="datetime"
-                icon="calendar-outline"
+              <View style={styles.createdBanner}>
+                <Ionicons name="time-outline" size={16} color={colors.grey600} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.createdLabel}>Card creation</Text>
+                  <Text style={styles.createdValue}>{formatDateTime(cardCreatedPreview.toISOString())}</Text>
+                </View>
+              </View>
+
+              <JobVisitsField
+                values={visits}
+                onChange={setVisits}
+                jobSiteAddress={jobSiteAddressPreview}
               />
 
               <Text style={styles.fieldLabel}>Reminder</Text>
@@ -635,37 +708,30 @@ export default function NewJobCardScreen() {
                   <Text style={styles.toggleHint}>
                     {phoneCalendarSyncActive
                       ? 'Schedule sync is active — leave off to avoid duplicates, or sync from Schedule.'
-                      : 'Adds one event now. Schedule sync updates the same event later.'}
+                      : 'Adds one phone event per scheduled visit. Rescheduled visits are removed automatically.'}
                   </Text>
                 </View>
               </Pressable>
+            </FormSection>
 
-              <View style={styles.row}>
-                <View style={styles.half}>
-                  <DateTimeField
-                    label="Planned arrival"
-                    value={arrivalAt}
-                    onChange={setArrivalAt}
-                    mode="time"
-                    icon="time-outline"
-                    placeholder="Pick time"
-                  />
-                </View>
-                <View style={styles.half}>
-                  <DateTimeField
-                    label="Planned departure"
-                    value={departureAt}
-                    onChange={setDepartureAt}
-                    mode="time"
-                    icon="time-outline"
-                    placeholder="Pick time"
-                  />
-                </View>
-              </View>
+            <FormSection title="Attachments">
+              <JobAttachments
+                embedded
+                photoIds={photoIds}
+                documentIds={documentIds}
+                onChange={async ({ photoIds: nextPhotos, documentIds: nextDocs }) => {
+                  setPhotoIds(nextPhotos);
+                  setDocumentIds(nextDocs);
+                }}
+              />
             </FormSection>
 
             <FormSection title="Work report">
-              <JobWorkReportsField values={workReports} onChange={setWorkReports} />
+              <JobWorkReportsField
+                value={workReport}
+                onChange={setWorkReport}
+                visitOptions={workReportVisitOptions}
+              />
               <FormField
                 label="Additional notes"
                 value={notes}
@@ -867,6 +933,19 @@ const styles = StyleSheet.create({
   half: {
     flex: 1,
   },
+  createdBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    backgroundColor: colors.grey100,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  createdLabel: { ...typography.caption, color: colors.grey600, marginBottom: 2 },
+  createdValue: { ...typography.body, color: colors.black, fontWeight: '600' },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',

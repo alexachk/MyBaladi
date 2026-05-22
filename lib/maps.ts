@@ -1,4 +1,6 @@
 import { Alert, Linking, Platform } from 'react-native';
+import type { StoredJobVisit } from './jobVisits';
+import { resolveVisitLocation, visitUsesJobLocation } from './jobVisits';
 
 async function openUrl(url: string): Promise<boolean> {
   try {
@@ -97,6 +99,34 @@ export function promptMapsForAddressEntry(entry: {
     return;
   }
   promptMapsForAddress(entry.text);
+}
+
+export function promptMapsForVisit(
+  visit: Pick<StoredJobVisit, 'location' | 'latitude' | 'longitude' | 'label'>,
+  jobSiteAddress: string,
+): void {
+  if (!visitUsesJobLocation(visit)) {
+    promptMapsForAddressEntry({
+      text: visit.location ?? '',
+      latitude: visit.latitude,
+      longitude: visit.longitude,
+    });
+    return;
+  }
+  promptMapsForAddress(jobSiteAddress);
+}
+
+export function canOpenMapsForAddress(text: string): boolean {
+  return Boolean(text.trim());
+}
+
+export function canOpenMapsForAddressEntry(entry: {
+  text: string;
+  latitude?: number;
+  longitude?: number;
+}): boolean {
+  return Boolean(entry.text.trim()) ||
+    (typeof entry.latitude === 'number' && typeof entry.longitude === 'number');
 }
 
 /** @deprecated Use promptMapsForAddress */

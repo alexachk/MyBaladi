@@ -11,8 +11,12 @@ export type NotificationType =
   | 'job_started'
   | 'job_finished'
   | 'job_signed'
+  | 'job_completed'
   | 'job_reopened'
-  | 'job_commented';
+  | 'job_commented'
+  | 'visit_rescheduled'
+  | 'visit_done'
+  | 'visit_added';
 
 export type RecipientScope = 'user' | 'admin';
 
