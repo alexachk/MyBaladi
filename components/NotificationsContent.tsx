@@ -133,7 +133,7 @@ export function NotificationsHeader({
   return (
     <View style={styles.header}>
       <Pressable onPress={onClose} hitSlop={12} style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}>
-        <Ionicons name="chevron-back" size={22} color={colors.black} />
+        <Ionicons name="chevron-forward" size={22} color={colors.black} />
       </Pressable>
       <Text style={styles.headerTitle} numberOfLines={1}>
         Notifications
