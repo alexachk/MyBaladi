@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -284,7 +283,7 @@ export default function CalendarScreen() {
             {phoneSyncing ? (
               <ActivityIndicator size="small" color={colors.black} />
             ) : (
-              <Ionicons name={Platform.OS === 'ios' ? 'calendar' : 'sync-outline'} size={18} color={colors.black} />
+              <Ionicons name="phone-portrait-outline" size={18} color={colors.black} />
             )}
           </Pressable>
         </View>
@@ -424,7 +423,7 @@ export default function CalendarScreen() {
               <Text style={styles.holidayBannerText}>{formatHolidayList(selectedHolidays)}</Text>
               {selectedHolidays.some((h) => h.tentative) ? (
                 <Text style={styles.holidayBannerNote}>
-                  * التواريخ الإسلامية قد تتغيّر بعد تأكيد الحكومة · Islamic dates may shift when confirmed
+                  * قد تتغيّر · May shift when confirmed
                 </Text>
               ) : null}
             </View>
@@ -433,7 +432,7 @@ export default function CalendarScreen() {
 
         {!hasFullLebanonHolidayYear(year) ? (
           <Text style={styles.holidayNote}>
-            Fixed + Easter holidays shown · العطل الثابتة معروضة. Lunar dates need app update for {year}.
+            Partial list for {year} · قائمة جزئية. App update adds the rest.
           </Text>
         ) : null}
 
