@@ -19,6 +19,7 @@
     "appwrite:list-app-devs": "node --env-file=.env scripts/appwrite/cli.mjs list-app-devs",
     "appwrite:create-test-accounts": "node --env-file=.env scripts/appwrite/create-test-accounts.mjs",
     "appwrite:seed-clients": "node --env-file=.env scripts/appwrite/seed-clients.mjs",
+    "appwrite:seed-jobs": "node --env-file=.env scripts/appwrite/seed-jobs.mjs",
     "recap:embed-fonts": "node scripts/embed-recap-fonts.mjs",
     "update:preview": "eas update --channel preview",
     "update:production": "eas update --channel production"

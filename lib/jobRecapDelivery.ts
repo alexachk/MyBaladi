@@ -1,6 +1,8 @@
 import { File } from 'expo-file-system';
 import * as MailComposer from 'expo-mail-composer';
 import * as Sharing from 'expo-sharing';
+import { Platform, Share } from 'react-native';
+import { pickRecapEmailLaunch } from './jobRecapEmailPicker';
 import { buildRecapPdfFileName, exportJobRecapPdf } from './jobRecapPdf';
 import { defaultJobRecapExportOptions, type JobRecapExportOptions } from './jobRecapExport';
 import { buildRecapEmail } from './jobRecapEmail';
@@ -108,19 +110,53 @@ export interface EmailRecapResult {
   status: MailComposer.MailComposerStatus;
 }
 
-/** Generate + open the native mail composer (pro template + PDF attached) + log. */
+function recapShareMessage(recipients: string[], body: string): string {
+  const to = recipients.length ? `To: ${recipients.join(', ')}\n\n` : '';
+  return Platform.OS === 'android' ? `${to}${body}` : body;
+}
+
+async function shareRecapEmail(
+  uri: string,
+  subject: string,
+  body: string,
+  recipients: string[],
+  jobReference: string,
+): Promise<EmailRecapResult> {
+  const message = `Subject: ${subject}\n\n${recapShareMessage(recipients, body)}`;
+  const shared = await Share.share(
+    { message, url: uri },
+    { dialogTitle: `Email recap · ${jobReference}`, subject },
+  );
+
+  if (shared.action === Share.dismissedAction) {
+    return { status: MailComposer.MailComposerStatus.CANCELLED };
+  }
+  return { status: MailComposer.MailComposerStatus.SENT };
+}
+
+/** Generate + open mail (user picks app) + log. */
 export async function emailRecap(
   job: JobCard,
   options: JobRecapExportOptions,
   actor: RecapActor,
   recipients: string[],
 ): Promise<EmailRecapResult> {
+  const launch = await pickRecapEmailLaunch();
+  if (!launch) {
+    return { status: MailComposer.MailComposerStatus.CANCELLED };
+  }
+
+  const uri = await generateRecapFile(job, options, actor);
+  const email = buildRecapEmail(job, actor.name);
+
+  if (launch === 'share') {
+    return shareRecapEmail(uri, email.subject, email.body, recipients, job.reference || '—');
+  }
+
   const available = await MailComposer.isAvailableAsync();
   if (!available) {
     throw new Error('No email account is set up on this device.');
   }
-  const uri = await generateRecapFile(job, options, actor);
-  const email = buildRecapEmail(job, actor.name);
 
   const result = await MailComposer.composeAsync({
     recipients: recipients.length ? recipients : undefined,

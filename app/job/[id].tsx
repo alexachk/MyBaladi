@@ -1136,6 +1136,9 @@ export default function JobDetailScreen() {
         await shareAndLogRecap(job, options, actor);
       } else if (mode === 'email') {
         const { status } = await emailRecap(job, options, actor, recipients);
+        if (status === MailComposerStatus.CANCELLED) {
+          return;
+        }
         if (status === MailComposerStatus.SENT) {
           Alert.alert('Recap sent', 'The intervention report was emailed.');
         }

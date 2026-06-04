@@ -485,7 +485,7 @@ export function JobRecapExportSheet({
               multiline
             />
             <Text style={styles.recipientHint}>
-              Pre-fills a professional email with the PDF attached. You can edit recipients in your mail app.
+              You will choose Apple Mail, Outlook, Gmail, or another mail app before sending. Recipients can be edited in the mail app.
             </Text>
           </ScrollView>
 
