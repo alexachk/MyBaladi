@@ -163,7 +163,20 @@ export function primaryAssigneeFromEntries(
   return { userId: first.userId, name: first.name };
 }
 
+export function formatAssigneeLabel(entry: StoredJobAssignee): string {
+  return entry.role === 'Lead' ? entry.name : `${entry.name} (${entry.role})`;
+}
+
 export function formatAssigneesDisplay(entries: StoredJobAssignee[]): string {
   if (!entries.length) return '';
-  return entries.map((e) => (e.role === 'Lead' ? e.name : `${e.name} (${e.role})`)).join(', ');
+  return entries.map(formatAssigneeLabel).join(', ');
+}
+
+/** Short list label for job cards (e.g. "Ali, Sam +1"). */
+export function formatAssigneesCompact(entries: StoredJobAssignee[], maxVisible = 2): string {
+  if (!entries.length) return '';
+  const labels = entries.map(formatAssigneeLabel);
+  if (labels.length <= maxVisible) return labels.join(', ');
+  const head = labels.slice(0, maxVisible).join(', ');
+  return `${head} +${labels.length - maxVisible}`;
 }

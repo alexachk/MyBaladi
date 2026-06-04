@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, shadow, spacing, typography } from '../constants/theme';
 import { JobCard } from '../types/jobCard';
 import { formatDateShort } from '../utils/formatDate';
+import { JobTeamLine } from './JobTeamLine';
 import { PriorityDot, StatusBadge } from './StatusBadge';
 
 interface JobCardItemProps {
@@ -39,6 +40,7 @@ export function JobCardItem({ job, onPress }: JobCardItemProps) {
             <Ionicons name="calendar-outline" size={14} color={colors.grey600} />
             <Text style={styles.metaText}>{formatDateShort(job.scheduledDate)}</Text>
           </View>
+          <JobTeamLine job={job} compact numberOfLines={1} />
         </View>
 
         <View style={styles.footer}>

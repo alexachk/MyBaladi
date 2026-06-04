@@ -9,12 +9,8 @@ const BUCKET_ID = 'job_attachments';
 const PDF_PRINT_DPI = 300;
 const PDF_DEVICE_SCALE = Math.max(4, PDF_PRINT_DPI / 96);
 
-const PAGE_MARGIN = {
-  top: '14mm',
-  right: '12mm',
-  bottom: '16mm',
-  left: '12mm',
-};
+/** Margins come from HTML @page; puppeteer margin 0 avoids double inset. */
+const PAGE_MARGIN = { top: '0', right: '0', bottom: '0', left: '0' };
 
 function adminClient(req) {
   return new Client()
@@ -46,7 +42,7 @@ async function htmlToPdf(html) {
     return await page.pdf({
       format: 'A4',
       printBackground: true,
-      preferCSSPageSize: true,
+      preferCSSPageSize: false,
       displayHeaderFooter: false,
       margin: PAGE_MARGIN,
     });

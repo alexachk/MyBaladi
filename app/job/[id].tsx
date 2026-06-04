@@ -30,6 +30,7 @@ import {
 } from '../../lib/jobReview';
 import { JobMissionNotesGroups } from '../../components/JobMissionNotesGroups';
 import { JobMissionScopeGroups } from '../../components/JobMissionScopeGroups';
+import { JobTeamLine } from '../../components/JobTeamLine';
 import { JobClientSiteEditor } from '../../components/JobClientSiteEditor';
 import { LaunchVisitSheet } from '../../components/LaunchVisitSheet';
 import { JobMissionScopesField } from '../../components/JobMissionScopesField';
@@ -110,6 +111,7 @@ import {
   buildRescheduleVisitUpdates,
   canDeleteVisitFromTimeline,
   formatScheduleLogEntry,
+  scheduleLogForDisplay,
   formatScheduleWhen,
   jobScheduledAt,
   reminderAtFromSchedule,
@@ -246,7 +248,7 @@ function WorkReportVisitGroups({ job }: { job: JobCard }) {
   if (!groups.length) return <Text style={styles.workEmpty}>No work recorded yet.</Text>;
 
   return (
-    <View style={styles.workGroups}>
+    <View style={[styles.workGroups, styles.workReportVisitGroups]}>
       {groups.map((group) => (
         <View key={group.visitId ?? 'general'} style={styles.workGroup}>
           <View style={styles.workGroupHead}>
@@ -1351,6 +1353,8 @@ export default function JobDetailScreen() {
           <PriorityDot priority={job.priority} />
         </View>
 
+        <JobTeamLine job={job} numberOfLines={3} style={styles.heroTeam} />
+
         {parent ? (
           <Pressable
             onPress={() => router.push(`/job/${parent.id}`)}
@@ -1369,7 +1373,12 @@ export default function JobDetailScreen() {
 
         {locked ? (
           <View style={styles.lockBanner}>
-            <Ionicons name="lock-closed" size={14} color={colors.warning} />
+            <Ionicons
+              name="lock-closed"
+              size={14}
+              color={colors.warning}
+              style={styles.lockBannerIcon}
+            />
             <Text style={styles.lockText}>
               Locked {job.lockedAt ? `· ${formatDate(job.lockedAt)}` : ''}
               {!canEdit && canSchedule ? ' · new visit can reopen' : ''}
@@ -1599,6 +1608,12 @@ export default function JobDetailScreen() {
                     </Text>
                     <Ionicons name="navigate-outline" size={14} color={colors.info} />
                   </Pressable>
+                  <JobTeamLine
+                    job={job}
+                    visitId={visit.id}
+                    numberOfLines={2}
+                    style={styles.visitRowTeam}
+                  />
                   {status === 'done' && visit.completedAt ? (
                     <Text style={styles.visitRowMeta}>Completed · {formatDateTime(visit.completedAt)}</Text>
                   ) : null}
@@ -1662,11 +1677,11 @@ export default function JobDetailScreen() {
           </View>
         ) : null}
 
-        {job.scheduleLog?.length ? (
+        {scheduleLogForDisplay(job.scheduleLog).length ? (
           <View style={styles.historyBlock}>
             <Text style={styles.historyTitle}>Schedule history</Text>
-            {[...(job.scheduleLog ?? [])].reverse().map((entry, reverseIndex) => {
-              const logIndex = (job.scheduleLog?.length ?? 0) - 1 - reverseIndex;
+            {[...scheduleLogForDisplay(job.scheduleLog)].reverse().map((entry) => {
+              const logIndex = (job.scheduleLog ?? []).indexOf(entry);
               return (
                 <View key={`${entry.at}-${logIndex}`} style={styles.historyRow}>
                   <View style={styles.historyRowMain}>
@@ -1900,7 +1915,9 @@ export default function JobDetailScreen() {
         ) : (
           <WorkReportVisitGroups job={job} />
         )}
-        <DetailRow label="Additional notes" value={job.notes} />
+        <View style={styles.workReportNotesDivider}>
+          <DetailRow label="Additional notes" value={job.notes} />
+        </View>
       </View>
 
       {canEdit ? (
@@ -2093,6 +2110,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  heroTeam: {
+    marginTop: spacing.sm,
+  },
   metaBlock: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2111,14 +2131,26 @@ const styles = StyleSheet.create({
   relText: { ...typography.caption, color: colors.info, fontWeight: '600' },
   lockBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+    alignItems: 'flex-start',
+    gap: spacing.sm,
     marginTop: spacing.sm,
-    padding: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     backgroundColor: colors.warningLight,
   },
-  lockText: { ...typography.caption, color: colors.warning, fontWeight: '700' },
+  lockBannerIcon: {
+    marginTop: 2,
+    flexShrink: 0,
+  },
+  lockText: {
+    ...typography.caption,
+    color: colors.warning,
+    fontWeight: '700',
+    flex: 1,
+    flexShrink: 1,
+    lineHeight: 18,
+  },
   editHint: {
     ...typography.caption,
     color: colors.grey600,
@@ -2220,6 +2252,7 @@ const styles = StyleSheet.create({
   visitIconBtnDisabled: { opacity: 0.4 },
   visitRowWhen: { ...typography.body, color: colors.grey600 },
   visitRowMeta: { ...typography.caption, color: colors.grey600 },
+  visitRowTeam: { marginTop: 2 },
   visitRowLocation: { ...typography.caption, color: colors.grey600, flex: 1 },
   visitLocationRow: {
     flexDirection: 'row',
@@ -2345,14 +2378,17 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.black,
   },
-  reportSection: {
-    gap: spacing.xs,
+  workReportVisitGroups: {
+    marginBottom: spacing.md,
   },
-  reportSectionBorder: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
+  workReportNotesDivider: {
+    marginTop: spacing.xxl,
+    paddingTop: spacing.xl,
     borderTopWidth: 1,
     borderTopColor: colors.grey200,
+  },
+  reportSection: {
+    gap: spacing.xs,
   },
   reportTitle: {
     ...typography.subheading,

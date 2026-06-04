@@ -61,6 +61,9 @@ export interface JobCard {
   technicianSignatureId?: string | null;
   clientSignatureId?: string | null;
   clientSignatureName?: string | null;
+  /** Visit this sign-off applies to (defaults to latest completed visit). */
+  signatureVisitId?: string | null;
+  technicianSignedAt?: string | null;
   lockedAt?: string | null;
   lockedBy?: string | null;
   notificationId?: string | null;

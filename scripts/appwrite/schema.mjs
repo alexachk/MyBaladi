@@ -142,6 +142,8 @@ export const COLLECTIONS = [
       { type: 'string', key: 'technicianSignatureId', size: 64 },
       { type: 'string', key: 'clientSignatureId', size: 64 },
       { type: 'string', key: 'clientSignatureName', size: 128 },
+      { type: 'string', key: 'signatureVisitId', size: 36 },
+      { type: 'datetime', key: 'technicianSignedAt' },
       { type: 'datetime', key: 'lockedAt' },
       { type: 'string', key: 'lockedBy', size: 36 },
       { type: 'string', key: 'notificationId', size: 128 },

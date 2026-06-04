@@ -1,6 +1,8 @@
 import type { JobCard } from '../types/jobCard';
 import type { OrgMember } from '../types/org';
+import { formatDateTime } from '../utils/formatDate';
 import { getDescendantIds } from './orgHierarchy';
+import type { RecapDocumentType } from './jobRecapExport';
 
 export interface ReviewActor {
   id: string;
@@ -115,4 +117,130 @@ export function reviewBadge(job: Pick<JobCard, 'reviewStatus' | 'reviewBypassed'
     default:
       return null;
   }
+}
+
+export interface RecapValidationRow {
+  label: string;
+  value: string;
+}
+
+export type RecapValidationTone = 'pending' | 'approved' | 'rejected' | 'none' | 'bypass';
+
+export interface RecapValidationDetails {
+  statusLabel: string;
+  tone: RecapValidationTone;
+  rows: RecapValidationRow[];
+}
+
+function resolveSubmittedByName(
+  job: Pick<JobCard, 'submittedById' | 'technicianId' | 'technicianName' | 'assignees'>,
+): string | undefined {
+  if (!job.submittedById) return undefined;
+  if (job.technicianId === job.submittedById && job.technicianName?.trim()) {
+    return job.technicianName.trim();
+  }
+  const assignee = job.assignees?.find((a) => a.userId === job.submittedById);
+  return assignee?.name?.trim() || undefined;
+}
+
+/** Rows for recap PDF supervisor validation section. */
+export function buildRecapValidationDetails(
+  job: Pick<
+    JobCard,
+    | 'reviewStatus'
+    | 'reviewBypassed'
+    | 'submittedAt'
+    | 'submittedById'
+    | 'technicianId'
+    | 'technicianName'
+    | 'assignees'
+    | 'reviewedByName'
+    | 'reviewedAt'
+    | 'reviewNote'
+    | 'lockedAt'
+    | 'clientSignatureName'
+    | 'status'
+  >,
+): RecapValidationDetails {
+  const badge = reviewBadge(job);
+  const tone: RecapValidationTone =
+    job.reviewBypassed && job.reviewStatus === 'approved'
+      ? 'bypass'
+      : (badge?.tone ?? 'none');
+  const statusLabel =
+    badge?.label ??
+    (job.status === 'pending_review'
+      ? 'Awaiting supervisor review'
+      : 'No supervisor review on file');
+
+  const rows: RecapValidationRow[] = [];
+
+  if (job.submittedAt) {
+    const who = resolveSubmittedByName(job);
+    rows.push({
+      label: 'Submitted for review',
+      value: who
+        ? `${formatDateTime(job.submittedAt)} · ${who}`
+        : formatDateTime(job.submittedAt),
+    });
+  } else if (job.reviewStatus === 'submitted') {
+    rows.push({ label: 'Submitted for review', value: 'Date not recorded' });
+  }
+
+  if (job.reviewBypassed && job.reviewedByName) {
+    rows.push({
+      label: 'Completed without supervisor revision',
+      value: job.reviewedAt
+        ? `${job.reviewedByName} · ${formatDateTime(job.reviewedAt)}`
+        : job.reviewedByName,
+    });
+  } else if (
+    (job.reviewStatus === 'approved' || job.reviewStatus === 'rejected') &&
+    job.reviewedByName
+  ) {
+    const action = job.reviewStatus === 'approved' ? 'Approved by' : 'Reviewed by';
+    rows.push({
+      label: action,
+      value: job.reviewedAt
+        ? `${job.reviewedByName} · ${formatDateTime(job.reviewedAt)}`
+        : job.reviewedByName,
+    });
+  }
+
+  if (job.reviewNote?.trim()) {
+    rows.push({ label: 'Supervisor note', value: job.reviewNote.trim() });
+  }
+
+  if (job.lockedAt) {
+    rows.push({ label: 'Signed & locked', value: formatDateTime(job.lockedAt) });
+  }
+
+  if (job.clientSignatureName?.trim()) {
+    rows.push({ label: 'Client sign-off', value: job.clientSignatureName.trim() });
+  }
+
+  return { statusLabel, tone, rows };
+}
+
+export function recapValidationSectionVisible(
+  job: Pick<
+    JobCard,
+    | 'reviewStatus'
+    | 'reviewBypassed'
+    | 'lockedAt'
+    | 'clientSignatureName'
+    | 'status'
+    | 'submittedAt'
+  >,
+  documentType: RecapDocumentType,
+): boolean {
+  if (documentType !== 'draft') return true;
+  return Boolean(
+    (job.reviewStatus && job.reviewStatus !== 'none') ||
+      job.reviewBypassed ||
+      job.lockedAt ||
+      job.clientSignatureName ||
+      job.submittedAt ||
+      job.status === 'pending_review',
+  );
 }

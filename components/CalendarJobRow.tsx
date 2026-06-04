@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
+import { JobTeamLine } from './JobTeamLine';
 import { visitOnDate } from '../lib/jobVisits';
 import { memberAccentBg } from '../utils/teamColors';
 import { JobCard } from '../types/jobCard';
@@ -62,6 +63,12 @@ export function CalendarJobRow({
           {visit?.label ? `${visit.label} · ` : ''}
           {job.missionType || 'Mission'} · {job.siteAddress || 'No address'}
         </Text>
+        <JobTeamLine
+          job={job}
+          visitId={visit?.id}
+          compact
+          numberOfLines={1}
+        />
         <StatusBadge status={job.status} />
       </View>
       <Ionicons name="chevron-forward" size={16} color={colors.grey400} />

@@ -130,20 +130,7 @@ export function buildLaunchVisitUpdates(
   });
 
   const schedule = resolveStoredSchedule({ ...job, visits: updatedVisits });
-  const logEntry: Omit<ScheduleLogEntry, 'at'> = {
-    userId: actor.id,
-    userName: actor.name,
-    fromDate: target.date,
-    fromTime: target.time,
-    toDate: target.date,
-    toTime: target.time,
-    action: 'launched',
-    visitId,
-    arrivalTime,
-    plannedDurationMinutes: target.durationMinutes,
-  };
-  const withLog = appendScheduleLog(schedule, logEntry);
-  const payload = schedulePayloadFromVisits({ ...job, scheduleLog: withLog.log }, updatedVisits);
+  const payload = schedulePayloadFromVisits({ ...job, scheduleLog: schedule.log }, updatedVisits);
   const active = updatedVisits.find((visit) => visit.id === visitId)!;
   const missionScopes = patchVisitTeamOnMissionScopes(job, visitId, team);
   const legacy = legacyFieldsFromMissionScopes(missionScopes);

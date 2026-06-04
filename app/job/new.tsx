@@ -760,6 +760,7 @@ export default function NewJobCardScreen() {
                 onChangeText={setNotes}
                 placeholder="Follow-up required, observations..."
                 multiline
+                containerStyle={styles.workReportNotesGap}
               />
             </FormSection>
 
@@ -960,6 +961,12 @@ const styles = StyleSheet.create({
   },
   priorityLabel: {
     marginTop: spacing.md,
+  },
+  workReportNotesGap: {
+    marginTop: spacing.xxl,
+    paddingTop: spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: colors.grey200,
   },
   row: {
     flexDirection: 'row',

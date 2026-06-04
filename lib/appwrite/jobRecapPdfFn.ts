@@ -3,16 +3,9 @@ import { getAppwriteClient } from './client';
 import { APPWRITE_ENDPOINT, JOB_RECAP_PDF_FUNCTION_ID } from './config';
 import { getFileViewUrl } from './storage';
 
-export interface RecapPdfChromeMeta {
-  companyName: string;
-  companyTagline: string;
-  appName: string;
-  generatedDate: string;
-  generatedByName: string;
-  jobReference: string;
-  documentTypeTag: string;
-  logoDataUri?: string;
-}
+import type { RecapPdfStampMeta } from '../jobRecapPdfStamp';
+
+export type RecapPdfChromeMeta = RecapPdfStampMeta;
 
 type Execution = {
   status: string;

@@ -202,18 +202,31 @@ export function formatScopeTitle(visits: StoredJobVisit[], visitId: string | nul
   return visitId ? visitLinkLabel(visits, visitId) : 'General (whole job)';
 }
 
+/** Visit scope → general scope → all scopes merged. */
+export function storedAssigneesForVisit(
+  job: Parameters<typeof missionScopesFromJob>[0],
+  visitId: string,
+): StoredJobAssignee[] {
+  const scopes = missionScopesFromJob(job);
+  const visitScope = scopes.find((scope) => scope.visitId === visitId);
+  if (visitScope?.team.length) return visitScope.team;
+  const general = scopes.find((scope) => !scope.visitId);
+  if (general?.team.length) return general.team;
+  return mergeTeamsFromScopes(scopes);
+}
+
+/** Whole-job team (all mission scopes, deduped). */
+export function jobLevelTeam(job: Parameters<typeof missionScopesFromJob>[0]): StoredJobAssignee[] {
+  return mergeTeamsFromScopes(missionScopesFromJob(job));
+}
+
 /** Team shown when launching a visit (visit scope → general → merged). */
 export function assigneesForVisitLaunch(
   job: Parameters<typeof missionScopesFromJob>[0],
   visitId: string,
 ): AssigneeEntry[] {
-  const scopes = missionScopesFromJob(job);
-  const visitScope = scopes.find((scope) => scope.visitId === visitId);
-  if (visitScope?.team.length) return assigneesForForm(visitScope.team);
-  const general = scopes.find((scope) => !scope.visitId);
-  if (general?.team.length) return assigneesForForm(general.team);
-  const merged = mergeTeamsFromScopes(scopes);
-  return merged.length ? assigneesForForm(merged) : assigneesForForm(undefined);
+  const stored = storedAssigneesForVisit(job, visitId);
+  return stored.length ? assigneesForForm(stored) : assigneesForForm(undefined);
 }
 
 /** Save confirmed on-site team on the visit mission scope. */

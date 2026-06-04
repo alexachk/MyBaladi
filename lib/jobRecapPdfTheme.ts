@@ -12,8 +12,14 @@ export const RECAP_MARGIN_MM = {
   left: 12,
 } as const;
 
-export const RECAP_HEADER_BAND_MM = 22;
+/** Logo + company lines (fits RECAP_LOGO.heightPt + text). */
+export const RECAP_HEADER_CONTENT_MM = 15;
+/** Gap between header block and body text. */
+export const RECAP_HEADER_GAP_MM = 2;
 export const RECAP_FOOTER_BAND_MM = 14;
+
+/** Max height of site map banner in recap PDF/HTML. */
+export const RECAP_MAP_DISPLAY_MAX_HEIGHT_MM = 40;
 
 /** Hairline borders render sharply in print (use pt, not px). */
 export const RECAP_BORDER_PT = 0.75;

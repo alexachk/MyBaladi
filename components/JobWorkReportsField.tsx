@@ -227,7 +227,7 @@ export function JobWorkReportsField({
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: spacing.md, marginBottom: spacing.md },
+  wrap: { gap: spacing.md },
   block: { gap: spacing.sm },
   labelRow: {
     flexDirection: 'row',

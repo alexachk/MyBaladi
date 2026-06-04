@@ -212,6 +212,11 @@ export function resolveStoredSchedule(job: Pick<
   };
 }
 
+/** Rows shown under “Schedule history” (reschedules / adds / completions — not launches). */
+export function scheduleLogForDisplay(log: ScheduleLogEntry[] = []): ScheduleLogEntry[] {
+  return log.filter((entry) => entry.action !== 'launched');
+}
+
 export function appendScheduleLog(
   schedule: StoredJobSchedule,
   entry: Omit<ScheduleLogEntry, 'at'> & { at?: string },

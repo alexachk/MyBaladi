@@ -26,7 +26,15 @@ import {
   serializeWorkReportsToStorage,
 } from '../jobWorkReports';
 
-const NULLABLE_DATETIMES = ['reminderAt', 'startedAt', 'finishedAt', 'lockedAt', 'submittedAt', 'reviewedAt'] as const;
+const NULLABLE_DATETIMES = [
+  'reminderAt',
+  'startedAt',
+  'finishedAt',
+  'technicianSignedAt',
+  'lockedAt',
+  'submittedAt',
+  'reviewedAt',
+] as const;
 
 /** Must match `scripts/appwrite/schema.mjs` sizes for job_cards. */
 const FIELD_MAX = {
@@ -62,6 +70,7 @@ const STRING_FIELDS = [
   'technicianSignatureId',
   'clientSignatureId',
   'clientSignatureName',
+  'signatureVisitId',
   'lockedBy',
   'notificationId',
   'calendarEventId',
@@ -174,6 +183,8 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     technicianSignatureId: nullableStr(doc.technicianSignatureId),
     clientSignatureId: nullableStr(doc.clientSignatureId),
     clientSignatureName: nullableStr(doc.clientSignatureName),
+    signatureVisitId: nullableStr(doc.signatureVisitId),
+    technicianSignedAt: nullableDate(doc.technicianSignedAt),
     lockedAt: nullableDate(doc.lockedAt),
     lockedBy: nullableStr(doc.lockedBy),
     notificationId: nullableStr(doc.notificationId),

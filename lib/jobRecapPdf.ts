@@ -23,7 +23,8 @@ import {
   type RecapDocumentType,
   type JobRecapExportOptions,
 } from './jobRecapExport';
-import { formatScheduleLogEntry, formatScheduleWhen } from './jobSchedule';
+import { buildSignOffPdfBlock, buildSignOffRecapHtml } from './jobSignatures';
+import { formatScheduleLogEntry, formatScheduleWhen, scheduleLogForDisplay } from './jobSchedule';
 import { formatVisitOnSiteTimes } from './jobVisitLink';
 import { formatVisitNotesList, missionNotesFromJob } from './jobVisitNotes';
 import {
@@ -50,33 +51,48 @@ import {
   type JobPriority,
   type JobStatus,
 } from '../types/jobCard';
+import {
+  buildRecapSiteMapMarkup,
+  buildRecapSiteMapMarkupSync,
+} from './jobRecapMap';
+import {
+  buildRecapValidationDetails,
+  recapValidationSectionVisible,
+} from './jobReview';
 import { formatDate, formatDateTime } from '../utils/formatDate';
 import { renderRecapPdfOnServer } from './appwrite/jobRecapPdfFn';
 import {
   A4_HEIGHT_PT,
   A4_WIDTH_PT,
-  PRINT_FOOTER_BAND_MM,
+  RECAP_PAGE_BOTTOM_MARGIN_MM,
+  RECAP_PAGE_TOP_MARGIN_MM,
   finalizeRecapPdf,
+  mmToPt,
+  recapLogoBase64FromDataUri,
   recapRasterWidthPx,
+  type RecapPdfStampMeta,
 } from './jobRecapPdfStamp';
 import { RECAP_FONT_FACE_CSS, RECAP_FONT_FAMILY } from './jobRecapPdfFonts';
 import {
   RECAP_BORDER_PT,
   RECAP_BRAND,
-  RECAP_LOGO,
+  RECAP_MAP_DISPLAY_MAX_HEIGHT_MM,
   RECAP_MARGIN_MM,
   RECAP_TYPO,
 } from './jobRecapPdfTheme';
 
 export interface JobRecapAssets {
   logoDataUri: string;
-  siteMapDataUri: string | null;
+  /** Rectangular map banner HTML (raster, tile grid, or SVG). */
+  siteMapMarkup: string;
   siteMapCoords: { latitude: number; longitude: number } | null;
   comments: JobComment[];
   photoDataUris: string[];
   documentNames: string[];
   workAttachmentPhotoUris: Record<string, string>;
   workAttachmentDocumentNames: Record<string, string>;
+  technicianSignatureDataUri: string | null;
+  clientSignatureDataUri: string | null;
 }
 
 const BALADI_LOGO = require('../assets/baladi-freres-sal.png');
@@ -89,6 +105,8 @@ const COMPANY = {
 
 export interface JobRecapPrintMeta {
   generatedByName?: string;
+  /** expo-print supplies margins — keep @page margin at 0 to avoid double inset. */
+  nativePrintMargins?: boolean;
 }
 
 function sanitizeRefForFileName(reference: string): string {
@@ -197,30 +215,6 @@ function row(label: string, value: string): string {
     </div>`;
 }
 
-function buildRecapPrintHeaderHtml(
-  assets: JobRecapAssets,
-  job: JobCard,
-  documentTypeTag: string,
-): string {
-  const logo = assets.logoDataUri
-    ? `<img class="print-header-logo" src="${assets.logoDataUri}" alt=""/>`
-    : '';
-  return `
-    <div class="print-header-inner">
-      <div class="print-header-left">
-        ${logo}
-        <div class="print-header-titles">
-          <div class="print-header-name">${escapeHtml(COMPANY.name)}</div>
-          <div class="print-header-tag">${escapeHtml(COMPANY.tagline)}</div>
-        </div>
-      </div>
-      <div class="print-header-right">
-        <div class="print-header-ref">${escapeHtml(job.reference || '—')}</div>
-        <div class="print-header-doc">${escapeHtml(documentTypeTag)}</div>
-      </div>
-    </div>`;
-}
-
 function section(title: string, body: string, icon?: string): string {
   if (!body.trim()) return '';
   return `
@@ -302,28 +296,6 @@ async function resolveSiteMapPinForRecap(
   return { ...coords, label: address };
 }
 
-async function loadStaticMapDataUri(latitude: number, longitude: number): Promise<string | null> {
-  const mapW = recapRasterWidthPx();
-  const mapH = Math.round(mapW / 2.1);
-  const urls = [
-    `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=15&size=${mapW}x${mapH}&markers=${latitude},${longitude},red-pushpin`,
-    `https://static-maps.yandex.ru/1.x/?ll=${longitude},${latitude}&size=${mapW},${mapH}&z=14&l=map&pt=${longitude},${latitude},pm2rdm`,
-  ];
-  for (const url of urls) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) continue;
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength < 200) continue;
-      const contentType = response.headers.get('content-type') || 'image/png';
-      return `data:${contentType};base64,${bytesToBase64(new Uint8Array(buffer))}`;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
 function siteLocationHtml(
   address: string,
   assets: JobRecapAssets,
@@ -332,22 +304,22 @@ function siteLocationHtml(
   const coords = assets.siteMapCoords
     ? formatCoordPair(assets.siteMapCoords.latitude, assets.siteMapCoords.longitude)
     : '';
-  const mapBlock = assets.siteMapDataUri
-    ? `<div class="site-map-wrap"><img class="site-map" src="${assets.siteMapDataUri}" alt="Site map"/></div>`
-    : '';
+  const mapBlock =
+    assets.siteMapMarkup ||
+    (assets.siteMapCoords
+      ? buildRecapSiteMapMarkupSync(
+          assets.siteMapCoords.latitude,
+          assets.siteMapCoords.longitude,
+        )
+      : '');
   const coordsBlock = coords
     ? `<div class="site-coords"><strong>GPS</strong> ${escapeHtml(coords)}</div>`
     : '';
-  const mapFallback =
-    !mapBlock && coords
-      ? `<div class="site-map-unavailable">Map preview could not be loaded · coordinates above are authoritative.</div>`
-      : '';
   return `
     <div class="site-location">
       ${address.trim() ? `<div class="site-address">${nl2br(address)}</div>` : ''}
       ${coordsBlock}
       ${mapBlock}
-      ${mapFallback}
     </div>`;
 }
 
@@ -379,6 +351,37 @@ function priorityBadge(priority: JobPriority): string {
   };
   const colors = map[priority];
   return badge(JOB_PRIORITY_LABELS[priority], colors.bg, colors.text);
+}
+
+const VALIDATION_TONE_COLORS: Record<
+  ReturnType<typeof buildRecapValidationDetails>['tone'],
+  { bg: string; text: string }
+> = {
+  pending: { bg: '#FEF3C7', text: '#D97706' },
+  approved: { bg: '#D1FAE5', text: '#059669' },
+  rejected: { bg: '#FEE2E2', text: '#DC2626' },
+  bypass: { bg: '#FEE2E2', text: '#DC2626' },
+  none: { bg: '#F3F4F6', text: '#6B7280' },
+};
+
+function validationStatusBadge(tone: keyof typeof VALIDATION_TONE_COLORS, label: string): string {
+  const colors = VALIDATION_TONE_COLORS[tone];
+  return badge(label, colors.bg, colors.text);
+}
+
+function buildRecapValidationSectionHtml(
+  job: JobCard,
+  documentType: RecapDocumentType,
+): string {
+  if (!recapValidationSectionVisible(job, documentType)) return '';
+  const details = buildRecapValidationDetails(job);
+  const statusPill = validationStatusBadge(details.tone, details.statusLabel);
+  const rows = details.rows.map((r) => row(r.label, r.value)).join('');
+  return section(
+    'Supervisor validation',
+    `<div class="validation-block">${statusPill}${rows ? `<div class="validation-rows">${rows}</div>` : ''}</div>`,
+    '✓',
+  );
 }
 
 function listBlock(items: string[], emptyLabel: string): string {
@@ -434,14 +437,23 @@ export async function prepareJobRecapAssets(
 
   const sitePin = options.includeClient ? await resolveSiteMapPinForRecap(job) : null;
 
-  const [logoDataUri, comments, siteMapDataUri, ...documentNames] = await Promise.all([
-    getBaladiLogoDataUri(),
-    options.includeComments ? listComments(job.id) : Promise.resolve([]),
-    sitePin ? loadStaticMapDataUri(sitePin.latitude, sitePin.longitude) : Promise.resolve(null),
-    ...(options.includeDocuments
-      ? documentIds.map((id) => getAttachmentName(id))
-      : []),
-  ]);
+  const [logoDataUri, comments, siteMapMarkup, techSigUri, clientSigUri, ...documentNames] =
+    await Promise.all([
+      getBaladiLogoDataUri(),
+      options.includeComments ? listComments(job.id) : Promise.resolve([]),
+      sitePin
+        ? buildRecapSiteMapMarkup(sitePin.latitude, sitePin.longitude)
+        : Promise.resolve(''),
+      job.technicianSignatureId
+        ? downloadAttachmentAsDataUri(job.technicianSignatureId)
+        : Promise.resolve(null),
+      job.clientSignatureId
+        ? downloadAttachmentAsDataUri(job.clientSignatureId)
+        : Promise.resolve(null),
+      ...(options.includeDocuments
+        ? documentIds.map((id) => getAttachmentName(id))
+        : []),
+    ]);
 
   const photoResults = options.includePhotos
     ? await Promise.all(photoIds.map((id) => downloadAttachmentAsDataUri(id)))
@@ -476,7 +488,9 @@ export async function prepareJobRecapAssets(
 
   return {
     logoDataUri,
-    siteMapDataUri,
+    siteMapMarkup: sitePin
+      ? siteMapMarkup || buildRecapSiteMapMarkupSync(sitePin.latitude, sitePin.longitude)
+      : '',
     siteMapCoords: sitePin
       ? { latitude: sitePin.latitude, longitude: sitePin.longitude }
       : null,
@@ -485,6 +499,8 @@ export async function prepareJobRecapAssets(
     documentNames: documentNames.filter((name): name is string => Boolean(name)),
     workAttachmentPhotoUris,
     workAttachmentDocumentNames,
+    technicianSignatureDataUri: techSigUri,
+    clientSignatureDataUri: clientSigUri,
   };
 }
 
@@ -523,8 +539,14 @@ export function buildJobRecapHtml(
       ? [job.contactName, job.contactPhone].filter(Boolean).join(' · ')
       : '';
 
+  const validationDetails = buildRecapValidationDetails(job);
+  const showValidation = recapValidationSectionVisible(job, options.documentType);
+
   const summaryCards = [
     { label: 'Created', value: formatDateTime(job.createdAt) },
+    ...(showValidation
+      ? [{ label: 'Validation', value: validationDetails.statusLabel }]
+      : []),
     ...(options.includeVisits
       ? [
           {
@@ -569,9 +591,10 @@ export function buildJobRecapHtml(
       : `<tr><td colspan="5" class="muted">No visits recorded.</td></tr>`
     : '';
 
+  const displayScheduleLog = scheduleLogForDisplay(job.scheduleLog);
   const historyRows =
-    options.includeScheduleHistory && (job.scheduleLog ?? []).length
-    ? [...(job.scheduleLog ?? [])]
+    options.includeScheduleHistory && displayScheduleLog.length
+    ? [...displayScheduleLog]
         .reverse()
         .map(
           (entry) => `
@@ -616,7 +639,7 @@ export function buildJobRecapHtml(
     ? [
         row('Client', job.clientName),
         options.includeClient &&
-        (job.siteAddress.trim() || assets.siteMapCoords || assets.siteMapDataUri)
+        (job.siteAddress.trim() || assets.siteMapCoords || assets.siteMapMarkup)
           ? `<div class="row">
       <div class="row-label">Site &amp; map</div>
       <div class="row-value">${siteLocationHtml(job.siteAddress, assets)}</div>
@@ -694,17 +717,24 @@ export function buildJobRecapHtml(
     ? `${workSection}${row('Additional notes', job.notes)}`
     : '';
 
+  const signOffBlock = buildSignOffPdfBlock(job, {
+    tech: assets.technicianSignatureDataUri,
+    client: assets.clientSignatureDataUri,
+  });
+  const signaturesSection = signOffBlock ? buildSignOffRecapHtml(signOffBlock) : '';
+
   const now = new Date();
   const generatedAt = formatDateTime(now.toISOString());
   const generatedDate = formatDate(now.toISOString());
   const typeMeta = RECAP_DOCUMENT_TYPE_META[options.documentType];
   const isDraft = options.documentType === 'draft';
   const docTitle = isDraft ? 'Intervention report — Draft' : 'Intervention report';
-  const printHeader = buildRecapPrintHeaderHtml(assets, job, typeMeta.tag);
-  const footerReserve = `${PRINT_FOOTER_BAND_MM}mm`;
-  const mapMinHeightPx = Math.round((recapRasterWidthPx() * 10) / 21);
-  const border = `${RECAP_BORDER_PT}pt`;
   const m = RECAP_MARGIN_MM;
+  const pageMarginCss = meta.nativePrintMargins
+    ? '0'
+    : `${RECAP_PAGE_TOP_MARGIN_MM}mm ${m.right}mm ${RECAP_PAGE_BOTTOM_MARGIN_MM}mm ${m.left}mm`;
+  const mapMaxH = RECAP_MAP_DISPLAY_MAX_HEIGHT_MM;
+  const border = `${RECAP_BORDER_PT}pt`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -715,17 +745,17 @@ export function buildJobRecapHtml(
   <style>
     ${RECAP_FONT_FACE_CSS}
     @page {
-      size: ${A4_WIDTH_PT}pt ${A4_HEIGHT_PT}pt;
-      margin: 0;
+      size: A4;
+      margin: ${pageMarginCss};
     }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
       padding: 0;
-      width: 100%;
-      max-width: 100%;
     }
     body {
+      width: auto;
+      max-width: none;
       font-family: ${RECAP_FONT_FAMILY};
       color: ${RECAP_BRAND.ink};
       font-size: ${RECAP_TYPO.body};
@@ -744,84 +774,25 @@ export function buildJobRecapHtml(
       image-rendering: -webkit-optimize-contrast;
     }
     .recap-page {
-      width: 100%;
-      max-width: 100%;
-      padding: ${m.top}mm ${m.right}mm ${footerReserve} ${m.left}mm;
       box-sizing: border-box;
     }
-    .print-header {
-      margin-bottom: 5mm;
-    }
-    .print-header-inner {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      padding-bottom: 2px;
-    }
-    .print-header-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-    .print-header-logo {
-      height: ${RECAP_LOGO.heightPt}pt;
-      width: auto;
-      max-width: ${RECAP_LOGO.maxWidthPt}pt;
-      object-fit: contain;
-      flex-shrink: 0;
-      image-rendering: -webkit-optimize-contrast;
-    }
-    .print-header-name {
-      font-size: 8pt;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: ${RECAP_BRAND.ink};
-      line-height: 1.2;
-    }
-    .print-header-tag {
-      font-size: 6pt;
-      color: ${RECAP_BRAND.grey600};
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-top: 1px;
-    }
-    .print-header-right { text-align: right; flex-shrink: 0; }
-    .print-header-ref {
-      font-size: 9.5pt;
-      font-weight: 800;
-      color: ${RECAP_BRAND.ink};
-    }
-    .print-header-doc {
-      font-size: 6.5pt;
-      font-weight: 700;
-      color: ${RECAP_BRAND.grey600};
-      text-transform: uppercase;
-      margin-top: 2px;
-    }
-    .watermark {
-      position: fixed;
-      top: 38%;
-      left: 0;
-      right: 0;
-      text-align: center;
-      transform: rotate(-26deg);
-      font-size: 64pt;
-      font-weight: 800;
-      letter-spacing: 0.12em;
-      color: rgba(107, 114, 128, 0.16);
-      z-index: 9999;
-      pointer-events: none;
-      user-select: none;
-    }
     .content {
-      position: relative;
-      width: 100%;
-      max-width: 100%;
       overflow-wrap: break-word;
       word-break: normal;
+    }
+    table.data-table {
+      width: 100%;
+      max-width: 100%;
+      table-layout: fixed;
+    }
+    .data-table th,
+    .data-table td {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
     }
     .cell-sub {
       font-size: 7.5pt;
@@ -842,30 +813,52 @@ export function buildJobRecapHtml(
       overflow: hidden;
       border: ${border} solid ${RECAP_BRAND.grey200};
       max-width: 100%;
+      max-height: ${mapMaxH}mm;
       background: ${RECAP_BRAND.grey100};
+      position: relative;
     }
     .site-map {
       display: block;
       width: 100%;
       max-width: 100%;
+      max-height: ${mapMaxH}mm;
       height: auto;
-      min-height: ${mapMinHeightPx}px;
-      aspect-ratio: 21 / 10;
+      aspect-ratio: 8 / 3;
       object-fit: cover;
       image-rendering: -webkit-optimize-contrast;
+    }
+    .site-map-tiles .site-map-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      width: 100%;
+      max-height: ${mapMaxH}mm;
+      aspect-ratio: 8 / 3;
+    }
+    .site-map-tiles .site-map-grid img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .site-map-pin {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      margin: -18px 0 0 -8px;
+      background: ${RECAP_BRAND.primary};
+      border: 2px solid ${RECAP_BRAND.ink};
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+      pointer-events: none;
+      z-index: 2;
     }
     .photo-cell img,
     .work-entry-photo img {
       image-rendering: -webkit-optimize-contrast;
-    }
-    .site-map-unavailable {
-      font-size: ${RECAP_TYPO.small};
-      color: ${RECAP_BRAND.grey600};
-      font-style: italic;
-      padding: 10px 12px;
-      border: ${border} dashed ${RECAP_BRAND.grey300};
-      border-radius: 6px;
-      background: ${RECAP_BRAND.grey50};
     }
     .site-coords strong {
       color: ${RECAP_BRAND.ink};
@@ -1103,18 +1096,43 @@ export function buildJobRecapHtml(
     .work-entry-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .work-entry-docs { margin: 4px 0 0; padding-left: 16px; font-size: 9pt; }
     .work-entry-docs li { margin-bottom: 2px; }
+    .validation-block { margin-top: 2px; }
+    .validation-block .badge { margin-bottom: 6px; }
+    .validation-rows .row:first-child { margin-top: 4px; }
+    .validation-rows .row-label { min-width: 38%; }
+    .sig-visit { font-size: ${RECAP_TYPO.small}; margin: 0 0 10px; }
+    .sig-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .sig-card {
+      flex: 1 1 240px;
+      border: ${border} solid ${RECAP_BRAND.grey200};
+      border-radius: 8px;
+      padding: 10px;
+      background: ${RECAP_BRAND.white};
+    }
+    .sig-head { display: flex; flex-direction: column; gap: 2px; font-size: ${RECAP_TYPO.small}; margin-bottom: 4px; }
+    .sig-time { font-size: ${RECAP_TYPO.tiny}; color: ${RECAP_BRAND.grey600}; margin-bottom: 6px; }
+    .sig-img-wrap {
+      border: ${border} dashed ${RECAP_BRAND.grey200};
+      border-radius: 6px;
+      padding: 6px;
+      background: ${RECAP_BRAND.grey50};
+      min-height: 72px;
+    }
+    .sig-img { max-width: 100%; max-height: 88px; display: block; object-fit: contain; }
   </style>
 </head>
 <body>
-  ${isDraft ? '<div class="watermark" aria-hidden="true">DRAFT</div>' : ''}
   <div class="recap-page">
-    ${printHeader ? `<div class="print-header">${printHeader}</div>` : ''}
   <div class="content">
     <div class="title-band">
       <div class="doc-kicker">${escapeHtml(docTitle)}</div>
       <div class="doc-title">${escapeHtml(job.clientName)}</div>
       <div class="doc-meta-line">${escapeHtml(typeMeta.description)} · Issued ${escapeHtml(generatedAt)} · Prepared by ${escapeHtml(generatedByName)}</div>
       <div class="badges">${statusBadge(job.status)} ${priorityBadge(job.priority)}${
+        showValidation
+          ? ` ${validationStatusBadge(validationDetails.tone, validationDetails.statusLabel)}`
+          : ''
+      }${
         job.lockedAt ? badge('Signed & locked', '#D1FAE5', RECAP_BRAND.success) : ''
       }</div>
     </div>
@@ -1131,6 +1149,7 @@ export function buildJobRecapHtml(
         .join('')}
     </div>
 
+    ${buildRecapValidationSectionHtml(job, options.documentType)}
     ${section('Client & site', clientSection, '◆')}
     ${contactsSection ? section('Site contacts', contactsSection, '◆') : ''}
     ${section('Mission & team', missionSection, '◆')}
@@ -1147,6 +1166,7 @@ export function buildJobRecapHtml(
         : ''
     }
     ${options.includeWorkReport ? section('Work report', workSectionWithNotes, '◆') : ''}
+    ${signaturesSection ? section('Signatures', signaturesSection, '◆') : ''}
     ${historyRows ? section('Schedule history', `<div class="timeline">${historyRows}</div>`, '◆') : ''}
     ${commentRows ? section('Comments', commentRows, '◆') : ''}
     ${photoGrid ? section('Site photos', photoGrid, '◆') : ''}
@@ -1166,7 +1186,7 @@ export async function exportJobRecapPdf(
   const assets = await prepareJobRecapAssets(job, options);
   const fileName = buildRecapPdfFileName(job, options.documentType, generatedAt);
   const typeMeta = RECAP_DOCUMENT_TYPE_META[options.documentType];
-  const chrome = {
+  const stampMeta: RecapPdfStampMeta = {
     appName: COMPANY.app,
     companyName: COMPANY.name,
     companyTagline: COMPANY.tagline,
@@ -1174,27 +1194,34 @@ export async function exportJobRecapPdf(
     generatedByName: meta.generatedByName?.trim() || '—',
     jobReference: job.reference || '—',
     documentTypeTag: typeMeta.tag,
-    logoDataUri: assets.logoDataUri,
+    logoPngBase64: recapLogoBase64FromDataUri(assets.logoDataUri),
+    isDraft: options.documentType === 'draft',
   };
 
   try {
     const serverHtml = buildJobRecapHtml(job, assets, options, meta);
-    const serverUri = await renderRecapPdfOnServer(serverHtml, fileName, chrome);
-    return await finalizeRecapPdf(serverUri, chrome, fileName);
+    const serverUri = await renderRecapPdfOnServer(serverHtml, fileName, stampMeta);
+    return await finalizeRecapPdf(serverUri, stampMeta, fileName);
   } catch {
     // Appwrite Chromium render unavailable — device fallback (lower quality).
   }
 
-  const html = buildJobRecapHtml(job, assets, options, meta);
+  const html = buildJobRecapHtml(job, assets, options, { ...meta, nativePrintMargins: true });
+  const sideMm = RECAP_MARGIN_MM;
   const { uri } = await Print.printToFileAsync({
     html,
     base64: false,
     width: A4_WIDTH_PT,
     height: A4_HEIGHT_PT,
-    margins: { top: 0, right: 0, bottom: 0, left: 0 },
+    margins: {
+      top: mmToPt(RECAP_PAGE_TOP_MARGIN_MM),
+      right: mmToPt(sideMm.right),
+      bottom: mmToPt(RECAP_PAGE_BOTTOM_MARGIN_MM),
+      left: mmToPt(sideMm.left),
+    },
   });
   try {
-    return await finalizeRecapPdf(uri, chrome, fileName);
+    return await finalizeRecapPdf(uri, stampMeta, fileName);
   } catch {
     return assignRecapPdfFileName(uri, fileName);
   }
