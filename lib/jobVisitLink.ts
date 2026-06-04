@@ -1,3 +1,4 @@
+import { formatVisitOnSiteStamp } from './visitDuration';
 import { formatVisitWhen, type StoredJobVisit } from './jobVisits';
 
 export interface VisitLinkOption {
@@ -40,8 +41,7 @@ export function visitLinkLabel(visits: StoredJobVisit[], visitId: string | null 
 }
 
 export function formatVisitOnSiteTimes(
-  visit: Pick<StoredJobVisit, 'arrivalTime' | 'departureTime'>,
+  visit: Pick<StoredJobVisit, 'arrivalTime' | 'departureTime' | 'durationMinutes'>,
 ): string {
-  if (!visit.arrivalTime && !visit.departureTime) return '';
-  return `${visit.arrivalTime || '—'} → ${visit.departureTime || '—'}`;
+  return formatVisitOnSiteStamp(visit.arrivalTime, visit.departureTime, visit.durationMinutes);
 }

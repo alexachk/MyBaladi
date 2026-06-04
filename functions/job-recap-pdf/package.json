@@ -1,0 +1,9 @@
+{
+  "name": "job-recap-pdf",
+  "type": "module",
+  "dependencies": {
+    "@sparticuz/chromium": "^131.0.1",
+    "node-appwrite": "^17.2.0",
+    "puppeteer-core": "^23.11.1"
+  }
+}

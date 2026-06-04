@@ -33,7 +33,8 @@ const FILTERS: Array<{
 }> = [
   { key: 'all', label: 'All', icon: 'apps-outline' },
   { key: 'scheduled', label: 'Scheduled', icon: 'calendar-outline' },
-  { key: 'in_progress', label: 'Active', icon: 'construct-outline' },
+  { key: 'planned', label: 'Planned', icon: 'calendar-outline' },
+  { key: 'in_progress', label: 'On site', icon: 'construct-outline' },
   { key: 'draft', label: 'Drafts', icon: 'document-outline' },
   { key: 'pending_review', label: 'Review', icon: 'time-outline' },
   { key: 'completed', label: 'Done', icon: 'checkmark-circle-outline' },
@@ -63,6 +64,7 @@ export default function JobsScreen() {
     return {
       all: jobCards.length,
       scheduled: jobCards.filter((j) => j.scheduledDate && j.scheduledDate >= today && j.status !== 'completed').length,
+      planned: jobCards.filter((j) => j.status === 'planned').length,
       in_progress: jobCards.filter((j) => j.status === 'in_progress').length,
       draft: jobCards.filter((j) => j.status === 'draft').length,
       pending_review: jobCards.filter((j) => j.status === 'pending_review').length,
@@ -77,7 +79,10 @@ export default function JobsScreen() {
         filter === 'all'
           ? true
           : filter === 'scheduled'
-            ? Boolean(job.scheduledDate) && job.scheduledDate >= today && job.status !== 'completed'
+            ? Boolean(job.scheduledDate) &&
+              job.scheduledDate >= today &&
+              job.status !== 'completed' &&
+              (job.status === 'planned' || job.status === 'draft' || job.status === 'in_progress')
             : job.status === filter;
 
       const q = query.trim().toLowerCase();

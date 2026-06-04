@@ -1,5 +1,9 @@
 import { createNotification, type CreateNotificationInput } from './appwrite/notifications';
-import { formatScheduleWhen, type ScheduleLogEntry } from './jobSchedule';
+import {
+  formatScheduleLogOnSiteDetail,
+  formatScheduleWhen,
+  type ScheduleLogEntry,
+} from './jobSchedule';
 import type { JobCard } from '../types/jobCard';
 
 interface Actor {
@@ -198,10 +202,12 @@ export async function notifyVisitScheduleEvents(
 
     if (entry.action === 'done') {
       const when = formatScheduleWhen(entry.toDate || entry.fromDate, entry.toTime ?? entry.fromTime);
+      const onSite = formatScheduleLogOnSiteDetail(entry, job.visits);
+      const stamp = onSite ? ` · ${onSite}` : '';
       await notifyJobAudience(job, actor, {
         type: 'visit_done',
         title: `Visit done · ${job.reference}`,
-        body: `${actor.name} completed visit · ${when}`,
+        body: `${actor.name} completed visit · ${when}${stamp}`,
       });
       continue;
     }
@@ -210,7 +216,7 @@ export async function notifyVisitScheduleEvents(
       const when = formatScheduleWhen(entry.toDate, entry.toTime);
       await notifyJobAudience(job, actor, {
         type: 'visit_added',
-        title: `Follow-up visit · ${job.reference}`,
+        title: `Visit added · ${job.reference}`,
         body: `${actor.name} programmed ${when}`,
       });
     }

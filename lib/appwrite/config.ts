@@ -15,6 +15,8 @@ export const appwriteConfig = {
   databaseId: process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID ?? '6a0b7bf6002a5babff7c',
   jobCardsCollectionId:
     process.env.EXPO_PUBLIC_APPWRITE_JOB_CARDS_COLLECTION_ID ?? 'job_cards',
+  jobRecapsCollectionId:
+    process.env.EXPO_PUBLIC_APPWRITE_JOB_RECAPS_COLLECTION_ID ?? 'job_recaps',
 };
 
 export function isAppwriteConfigured(): boolean {
@@ -27,6 +29,9 @@ export function isAppwriteDatabaseConfigured(): boolean {
 
 export const ADMIN_USERS_FUNCTION_ID =
   process.env.EXPO_PUBLIC_APPWRITE_ADMIN_USERS_FUNCTION_ID ?? 'admin_users';
+
+export const JOB_RECAP_PDF_FUNCTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_JOB_RECAP_PDF_FUNCTION_ID ?? 'job_recap_pdf';
 
 export function appwriteConsoleUsersUrl(): string {
   return `https://cloud.appwrite.io/console/project-${appwriteConfig.projectId}/auth/users`;
@@ -54,7 +59,7 @@ export const APPWRITE_JOB_CARD_SCHEMA = {
     {
       key: 'status',
       type: 'enum',
-      elements: ['draft', 'in_progress', 'completed', 'pending_review'],
+      elements: ['draft', 'planned', 'in_progress', 'completed', 'pending_review'],
       required: true,
     },
     {

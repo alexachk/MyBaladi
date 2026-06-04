@@ -3,6 +3,8 @@ import { getAccount, isAppwriteConfigured } from './client';
 
 export const ADMIN_LABEL = 'admin';
 export const APP_DEV_LABEL = 'appdev';
+/** Level 2+ — client delete on persons/companies collections. */
+export const LEAD_LABEL = 'lead';
 
 export const MANAGEMENT_LABELS = [ADMIN_LABEL, APP_DEV_LABEL] as const;
 

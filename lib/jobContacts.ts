@@ -347,6 +347,21 @@ export function splitJobContactName(name: string): { firstName: string; lastName
   return splitLegacyName(name);
 }
 
+/** Unique email addresses across all job contacts — used to prefill recap email recipients. */
+export function collectJobContactEmails(contacts: StoredJobContact[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const contact of contacts ?? []) {
+    for (const entry of contact.contactEmails ?? []) {
+      const address = entry.address?.trim().toLowerCase();
+      if (!address || seen.has(address)) continue;
+      seen.add(address);
+      out.push(entry.address.trim());
+    }
+  }
+  return out;
+}
+
 export function jobContactRowHasContent(row: JobContactEntry): boolean {
   return Boolean(
     row.personId ||

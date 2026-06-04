@@ -16,6 +16,11 @@ interface JobWorkReportsFieldProps {
   value: WorkReportFormState;
   onChange: (value: WorkReportFormState) => void;
   visitOptions?: WorkReportVisitOption[];
+  lockedVisitIds?: string[];
+}
+
+function isVisitRowLocked(visitId: string | null, lockedVisitIds: string[]): boolean {
+  return Boolean(visitId && lockedVisitIds.includes(visitId));
 }
 
 function TextEntryList({
@@ -25,6 +30,8 @@ function TextEntryList({
   rows,
   visitOptions,
   onChange,
+  showAttachments = true,
+  lockedVisitIds = [],
 }: {
   label: string;
   addLabel: string;
@@ -32,6 +39,8 @@ function TextEntryList({
   rows: WorkReportTextEntry[];
   visitOptions: WorkReportVisitOption[];
   onChange: (rows: WorkReportTextEntry[]) => void;
+  showAttachments?: boolean;
+  lockedVisitIds?: string[];
 }) {
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const defaultVisitId = visitOptions.find((option) => option.id)?.id ?? null;
@@ -42,13 +51,19 @@ function TextEntryList({
 
   const removeRow = (index: number) => {
     const next = rows.filter((_, i) => i !== index);
-    onChange(next.length > 0 ? next : [{
-      key: newContactKey('entry'),
-      text: '',
-      visitId: defaultVisitId,
-      photoIds: [],
-      documentIds: [],
-    }]);
+    onChange(
+      next.length > 0
+        ? next
+        : [
+            {
+              key: newContactKey('entry'),
+              text: '',
+              visitId: defaultVisitId,
+              photoIds: [],
+              documentIds: [],
+            },
+          ],
+    );
   };
 
   const addRow = () => {
@@ -78,15 +93,20 @@ function TextEntryList({
       </View>
 
       <View style={styles.rows}>
-        {rows.map((row, index) => (
-          <View key={row.key} style={styles.card}>
+        {rows.map((row, index) => {
+          const rowLocked = isVisitRowLocked(row.visitId, lockedVisitIds);
+          return (
+          <View key={row.key} style={[styles.card, rowLocked && styles.cardLocked]}>
+            {rowLocked ? (
+              <Text style={styles.lockedBanner}>Completed visit — Level 2/3 only</Text>
+            ) : null}
             <View style={styles.cardTop}>
               {rows.length > 1 ? (
                 <Text style={styles.rowIndex}>#{index + 1}</Text>
               ) : (
                 <View />
               )}
-              {rows.length > 1 ? (
+              {rows.length > 1 && !rowLocked ? (
                 <Pressable
                   onPress={() => removeRow(index)}
                   hitSlop={8}
@@ -97,6 +117,7 @@ function TextEntryList({
               ) : null}
             </View>
 
+            <View pointerEvents={rowLocked ? 'none' : 'auto'} style={rowLocked ? styles.disabledBlock : undefined}>
             {visitOptions.length > 1 ? (
               <Pressable
                 onPress={() => setPickerIndex(index)}
@@ -118,15 +139,20 @@ function TextEntryList({
               style={[styles.input, styles.multiline]}
               multiline
               textAlignVertical="top"
+              editable={!rowLocked}
             />
 
-            <WorkReportEntryAttachments
-              photoIds={row.photoIds}
-              documentIds={row.documentIds}
-              onChange={(attachments) => updateRow(index, attachments)}
-            />
+            {showAttachments ? (
+              <WorkReportEntryAttachments
+                photoIds={row.photoIds}
+                documentIds={row.documentIds}
+                onChange={(attachments) => updateRow(index, attachments)}
+              />
+            ) : null}
+            </View>
           </View>
-        ))}
+          );
+        })}
       </View>
 
       <PickerSheet
@@ -148,8 +174,16 @@ function TextEntryList({
   );
 }
 
-export function JobWorkReportsField({ value, onChange, visitOptions = [] }: JobWorkReportsFieldProps) {
-  const state = value.workItems.length || value.partItems.length ? value : defaultWorkReportFormState();
+export function JobWorkReportsField({
+  value,
+  onChange,
+  visitOptions = [],
+  lockedVisitIds = [],
+}: JobWorkReportsFieldProps) {
+  const state =
+    value.workItems.length || value.partItems.length || value.noteItems?.length
+      ? { ...defaultWorkReportFormState(), ...value, noteItems: value.noteItems ?? [] }
+      : defaultWorkReportFormState();
   const options = useMemo(
     () =>
       visitOptions.length
@@ -167,6 +201,7 @@ export function JobWorkReportsField({ value, onChange, visitOptions = [] }: JobW
         rows={state.workItems}
         visitOptions={options}
         onChange={(workItems) => onChange({ ...state, workItems })}
+        lockedVisitIds={lockedVisitIds}
       />
       <TextEntryList
         label="Parts used"
@@ -175,6 +210,17 @@ export function JobWorkReportsField({ value, onChange, visitOptions = [] }: JobW
         rows={state.partItems}
         visitOptions={options}
         onChange={(partItems) => onChange({ ...state, partItems })}
+        lockedVisitIds={lockedVisitIds}
+      />
+      <TextEntryList
+        label="Work notes"
+        addLabel="Add note"
+        placeholder="Observations, follow-ups, site context…"
+        rows={state.noteItems}
+        visitOptions={options}
+        onChange={(noteItems) => onChange({ ...state, noteItems })}
+        showAttachments={false}
+        lockedVisitIds={lockedVisitIds}
       />
     </View>
   );
@@ -192,6 +238,14 @@ const styles = StyleSheet.create({
   addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   addText: { ...typography.caption, color: colors.primary, fontWeight: '600' },
   rows: { gap: spacing.sm },
+  cardLocked: { backgroundColor: colors.grey100, opacity: 0.92 },
+  lockedBanner: {
+    ...typography.caption,
+    color: colors.grey600,
+    fontWeight: '700',
+    fontStyle: 'italic',
+  },
+  disabledBlock: { opacity: 0.55 },
   card: {
     backgroundColor: colors.white,
     borderWidth: 1,

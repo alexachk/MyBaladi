@@ -40,7 +40,14 @@ export const ADMIN_USERS_FUNCTION = {
   runtime: 'node-22',
   entrypoint: 'src/main.js',
   execute: ['users'],
-  scopes: ['users.read', 'users.write'],
+  scopes: [
+    'users.read',
+    'users.write',
+    'databases.read',
+    'databases.write',
+    'documents.read',
+    'documents.write',
+  ],
   timeout: 30,
 };
 
@@ -52,12 +59,34 @@ export const PUSH_NOTIFICATIONS_FUNCTION = {
   execute: [],
   scopes: ['users.read'],
   timeout: 15,
+  // Doubles as keep-alive: a scheduled (event-less) run pings Appwrite so the
+  // free-tier project keeps registering activity and is never auto-paused.
+  // (Free plan caps functions, so we reuse this one instead of a dedicated fn.)
+  schedule: '0 6 */3 * *', // 06:00 every 3rd day
   events(databaseId) {
     return [`databases.${databaseId}.collections.notifications.documents.*.create`];
   },
 };
 
-export const APPWRITE_FUNCTIONS = [ADMIN_USERS_FUNCTION, PUSH_NOTIFICATIONS_FUNCTION];
+export const JOB_RECAP_PDF_FUNCTION = {
+  id: 'job_recap_pdf',
+  name: 'Job Recap PDF',
+  runtime: 'node-22',
+  entrypoint: 'src/main.js',
+  execute: ['users'],
+  scopes: [
+    'users.read',
+    'files.read',
+    'files.write',
+  ],
+  timeout: 120,
+};
+
+export const APPWRITE_FUNCTIONS = [
+  ADMIN_USERS_FUNCTION,
+  PUSH_NOTIFICATIONS_FUNCTION,
+  JOB_RECAP_PDF_FUNCTION,
+];
 
 /**
  * Attribute kinds:
@@ -81,7 +110,7 @@ export const COLLECTIONS = [
       { type: 'string', key: 'clientName', size: 256, required: true },
       { type: 'string', key: 'siteAddress', size: 512 },
       { type: 'string', key: 'contactName', size: 128 },
-      { type: 'string', key: 'contactPhone', size: 32 },
+      { type: 'string', key: 'contactPhone', size: 128 },
       { type: 'string', key: 'missionType', size: 64 },
       { type: 'string', key: 'equipment', size: 256 },
       { type: 'string', key: 'technicianName', size: 128, required: true },
@@ -95,7 +124,12 @@ export const COLLECTIONS = [
       { type: 'string', key: 'workPerformed', size: 5000 },
       { type: 'string', key: 'partsUsed', size: 2000 },
       { type: 'string', key: 'notes', size: 2000 },
-      { type: 'enum', key: 'status', elements: ['draft', 'in_progress', 'completed', 'pending_review'], required: true },
+      {
+        type: 'enum',
+        key: 'status',
+        elements: ['draft', 'planned', 'in_progress', 'completed', 'pending_review'],
+        required: true,
+      },
       { type: 'enum', key: 'priority', elements: ['low', 'normal', 'high', 'urgent'], required: true },
       { type: 'enum', key: 'clientType', elements: ['person', 'company'] },
       { type: 'string', key: 'personId', size: 36 },
@@ -114,6 +148,15 @@ export const COLLECTIONS = [
       { type: 'string', key: 'calendarEventId', size: 128 },
       { type: 'string', key: 'photoIds', size: 64, array: true },
       { type: 'string', key: 'documentIds', size: 64, array: true },
+      // Validation / approval workflow
+      { type: 'enum', key: 'reviewStatus', elements: ['none', 'submitted', 'approved', 'rejected'], default: 'none' },
+      { type: 'string', key: 'submittedById', size: 36 },
+      { type: 'datetime', key: 'submittedAt' },
+      { type: 'string', key: 'reviewedById', size: 36 },
+      { type: 'string', key: 'reviewedByName', size: 128 },
+      { type: 'datetime', key: 'reviewedAt' },
+      { type: 'string', key: 'reviewNote', size: 1000 },
+      { type: 'boolean', key: 'reviewBypassed', default: false },
     ],
     indexes: [
       { key: 'technicianId_idx', type: 'key', attributes: ['technicianId'] },
@@ -124,13 +167,57 @@ export const COLLECTIONS = [
       { key: 'personId_idx', type: 'key', attributes: ['personId'] },
       { key: 'companyId_idx', type: 'key', attributes: ['companyId'] },
       { key: 'parentJobId_idx', type: 'key', attributes: ['parentJobId'] },
+      { key: 'reviewStatus_idx', type: 'key', attributes: ['reviewStatus'] },
+    ],
+  },
+  {
+    id: 'job_recaps',
+    name: 'Job Recaps',
+    documentSecurity: true,
+    collectionPermissions: withAppDev(['create("users")', 'read("label:admin")', 'update("label:admin")', 'delete("label:admin")']),
+    attributes: [
+      { type: 'string', key: 'jobId', size: 36, required: true },
+      { type: 'string', key: 'jobReference', size: 64 },
+      { type: 'string', key: 'clientName', size: 256 },
+      { type: 'string', key: 'fileId', size: 64, required: true },
+      { type: 'string', key: 'fileName', size: 256 },
+      // Attribution for KPI stats — the technician credited for the recap
+      { type: 'string', key: 'technicianId', size: 36 },
+      { type: 'string', key: 'technicianName', size: 128 },
+      { type: 'string', key: 'generatedById', size: 36, required: true },
+      { type: 'string', key: 'generatedByName', size: 128 },
+      // Snapshot of the export options used (JSON) + a human label of sections
+      { type: 'string', key: 'optionsJson', size: 4000 },
+      { type: 'string', key: 'summary', size: 1000 },
+      // Signature confirmation captured at recap time
+      { type: 'string', key: 'clientSignatureId', size: 64 },
+      { type: 'string', key: 'clientSignatureName', size: 128 },
+      { type: 'datetime', key: 'signedAt' },
+      // Email log
+      { type: 'string', key: 'emailedTo', size: 512 },
+      { type: 'datetime', key: 'emailedAt' },
+      { type: 'string', key: 'createdBy', size: 36 },
+      // save = archived via Save icon; share/email are not shown in job recap history
+      { type: 'string', key: 'deliveryMode', size: 16 },
+    ],
+    indexes: [
+      { key: 'jobId_idx', type: 'key', attributes: ['jobId'] },
+      { key: 'deliveryMode_idx', type: 'key', attributes: ['deliveryMode'] },
+      { key: 'technicianId_idx', type: 'key', attributes: ['technicianId'] },
+      { key: 'generatedById_idx', type: 'key', attributes: ['generatedById'] },
     ],
   },
   {
     id: 'persons',
     name: 'Persons',
     documentSecurity: false,
-    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")']),
+    collectionPermissions: withAppDev([
+      'read("users")',
+      'create("users")',
+      'update("users")',
+      'delete("label:admin")',
+      'delete("label:lead")',
+    ]),
     attributes: [
       { type: 'string', key: 'firstName', size: 128, required: true },
       { type: 'string', key: 'lastName', size: 128 },
@@ -155,7 +242,13 @@ export const COLLECTIONS = [
     id: 'companies',
     name: 'Companies',
     documentSecurity: false,
-    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("users")', 'delete("label:admin")']),
+    collectionPermissions: withAppDev([
+      'read("users")',
+      'create("users")',
+      'update("users")',
+      'delete("label:admin")',
+      'delete("label:lead")',
+    ]),
     attributes: [
       { type: 'string', key: 'name', size: 256, required: true },
       { type: 'string', key: 'legalName', size: 256 },

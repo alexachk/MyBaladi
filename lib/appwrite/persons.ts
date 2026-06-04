@@ -12,6 +12,7 @@ import {
 } from '../clientContact';
 import { appwriteConfig, isAppwriteDatabaseConfigured } from './config';
 import { getDatabases } from './client';
+import { deleteClientDocument } from './deleteClientDocument';
 import { buildFullName, type Person } from '../../types/client';
 
 const COLLECTION_ID = 'persons';
@@ -130,9 +131,5 @@ export async function updatePerson(id: string, updates: Partial<PersonInput>): P
 }
 
 export async function deletePerson(id: string): Promise<void> {
-  await getDatabases().deleteDocument({
-    databaseId: appwriteConfig.databaseId,
-    collectionId: COLLECTION_ID,
-    documentId: id,
-  });
+  await deleteClientDocument(COLLECTION_ID, id);
 }

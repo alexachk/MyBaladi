@@ -10,7 +10,6 @@ import {
   assigneeRolePickerTitle,
   defaultAssigneeEntry,
   filterPersonnelForAssigneeRole,
-  personnelMatchesAssigneeRole,
   type AssigneeEntry,
   type AssigneeRole,
 } from '../lib/jobAssignees';
@@ -152,21 +151,7 @@ export function JobAssigneesField({
         onClose={() => setRolePickerIndex(null)}
         onSelect={(opt) => {
           if (rolePickerIndex !== null) {
-            const nextRole = opt.id as AssigneeRole;
-            const current = rows[rolePickerIndex];
-            const patch: Partial<AssigneeEntry> = { role: nextRole };
-            if (
-              current.userId &&
-              !personnelMatchesAssigneeRole(
-                personnel.find((person) => person.id === current.userId)?.position ?? '',
-                personnel.find((person) => person.id === current.userId)?.labels ?? [],
-                nextRole,
-              )
-            ) {
-              patch.userId = '';
-              patch.name = '';
-            }
-            updateRow(rolePickerIndex, patch);
+            updateRow(rolePickerIndex, { role: opt.id as AssigneeRole });
           }
           setRolePickerIndex(null);
         }}

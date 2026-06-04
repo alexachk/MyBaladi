@@ -8,6 +8,12 @@ const STATUS_CONFIG: Record<
   { label: string; bg: string; text: string; icon: keyof typeof Ionicons.glyphMap }
 > = {
   draft: { label: 'Draft', bg: colors.grey100, text: colors.grey600, icon: 'document-outline' },
+  planned: {
+    label: 'Planned',
+    bg: colors.primaryLight,
+    text: colors.primaryDark,
+    icon: 'calendar-outline',
+  },
   in_progress: {
     label: 'In Progress',
     bg: colors.infoLight,

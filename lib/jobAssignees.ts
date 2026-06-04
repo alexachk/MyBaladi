@@ -1,6 +1,6 @@
 import { newContactKey } from './clientContact';
 import { APP_DEV_LABEL } from './appwrite/auth';
-import { getRoleLevel, isPlatformRole } from '../constants/positions';
+import { isPlatformRole } from '../constants/positions';
 import type { Personnel } from './appwrite/adminUsers';
 
 export type AssigneeRole = 'Lead' | 'Support' | 'Supervisor' | 'Other';
@@ -21,34 +21,20 @@ export function isJobAssignablePersonnel(person: Pick<Personnel, 'position' | 'l
   return !isPlatformRole(person.position) && !person.labels.includes(APP_DEV_LABEL);
 }
 
+/** Job-card roles are labels only — not tied to org level / managerId. */
 export function personnelMatchesAssigneeRole(
   position: string,
   labels: string[],
-  role: AssigneeRole,
+  _role?: AssigneeRole,
 ): boolean {
-  const level = getRoleLevel(position);
-  const isAdmin = labels.includes('admin');
-
-  switch (role) {
-    case 'Lead':
-      return level === 2 || level === 3 || isAdmin;
-    case 'Supervisor':
-      return level === 2 || level === 3 || isAdmin;
-    case 'Support':
-      return level === 1 || (!level && !isPlatformRole(position));
-    case 'Other':
-    default:
-      return true;
-  }
+  return isJobAssignablePersonnel({ position, labels });
 }
 
 export function filterPersonnelForAssigneeRole(
   personnel: Personnel[],
-  role: AssigneeRole,
+  _role?: AssigneeRole,
 ): Personnel[] {
-  return personnel
-    .filter(isJobAssignablePersonnel)
-    .filter((person) => personnelMatchesAssigneeRole(person.position, person.labels, role));
+  return personnel.filter(isJobAssignablePersonnel);
 }
 
 export function assigneeRolePickerTitle(role: AssigneeRole): string {
@@ -65,18 +51,8 @@ export function assigneeRolePickerTitle(role: AssigneeRole): string {
   }
 }
 
-export function assigneeRolePickerEmptyLabel(role: AssigneeRole): string {
-  switch (role) {
-    case 'Lead':
-      return 'No leads found. Add a Supervisor or Operations Manager in Admin.';
-    case 'Support':
-      return 'No technicians found. Create a Technician account in Admin.';
-    case 'Supervisor':
-      return 'No supervisors found. Create a Supervisor account in Admin.';
-    case 'Other':
-    default:
-      return 'No personnel found. Create accounts in Admin.';
-  }
+export function assigneeRolePickerEmptyLabel(_role?: AssigneeRole): string {
+  return 'No personnel found. Create field accounts in Admin.';
 }
 
 export function assigneeRolePickHint(role: AssigneeRole): string {

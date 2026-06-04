@@ -58,7 +58,7 @@ function addressHaystack(client: {
   if (client.address?.trim()) parts.push(client.address.trim());
 
   for (const entry of clientContactAddresses(client)) {
-    parts.push(entry.label, entry.reference, entry.text);
+    parts.push(entry.label, entry.reference ?? '', entry.text);
   }
 
   return parts;

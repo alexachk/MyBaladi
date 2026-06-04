@@ -7,13 +7,16 @@ import { colors, layout, spacing, typography } from '../constants/theme';
 interface StackPageHeaderProps {
   title: string;
   onBack?: () => void;
+  /** Modal stacks already inset the screen — skip full status-bar padding. */
+  compactTop?: boolean;
 }
 
-export function StackPageHeader({ title, onBack }: StackPageHeaderProps) {
+export function StackPageHeader({ title, onBack, compactTop }: StackPageHeaderProps) {
   const insets = useSafeAreaInsets();
+  const paddingTop = compactTop ? spacing.sm : insets.top;
 
   return (
-    <View style={[styles.wrap, { paddingTop: insets.top }]}>
+    <View style={[styles.wrap, { paddingTop }]}>
       <View style={styles.row}>
         <Pressable
           onPress={onBack ?? (() => router.back())}

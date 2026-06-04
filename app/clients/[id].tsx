@@ -23,6 +23,7 @@ import { PrimaryButton } from '../../components/PrimaryButton';
 import { StackPageHeader } from '../../components/StackPageHeader';
 import { colors, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
+import { canDeleteClient } from '../../lib/clientAccess';
 import { useClients } from '../../context/ClientsContext';
 import { promptEmailActions, openWebsite, promptPhoneActions } from '../../lib/contactActions';
 import {
@@ -60,7 +61,8 @@ type ClientEditErrors = {
 
 export default function ClientDetailScreen() {
   const { id, type } = useLocalSearchParams<{ id: string; type?: string }>();
-  const { isAdmin } = useAuth();
+  const { user } = useAuth();
+  const mayDeleteClient = canDeleteClient(user);
   const { jobCards } = useJobCards();
   const { findPerson, findCompany, companies, editPerson, editCompany, removePerson, removeCompany } =
     useClients();
@@ -491,7 +493,7 @@ export default function ClientDetailScreen() {
             </View>
           )}
 
-          {isAdmin ? (
+          {mayDeleteClient ? (
             <Pressable onPress={handleDelete} style={({ pressed }) => [styles.deleteBtn, pressed && styles.pressed]}>
               <Ionicons name="trash-outline" size={16} color={colors.error} />
               <Text style={styles.deleteText}>Delete client</Text>

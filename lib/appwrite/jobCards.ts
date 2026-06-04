@@ -1,18 +1,23 @@
 import { ID, Permission, Query, Role } from 'react-native-appwrite';
+import { formatAppwriteError } from '../appwriteErrors';
 import { appwriteConfig, isAppwriteConfigured, isAppwriteDatabaseConfigured } from './config';
 import { getAccount, getDatabases } from './client';
-import { listPersonnel } from './adminUsers';
-import { getManagerReadersForAssignees } from '../orgHierarchy';
+import { deleteJobCardViaAdmin, syncJobCardPermissions } from './adminUsers';
 import { JobCard, JobPriority, JobStatus } from '../../types/jobCard';
 import type { ClientType } from '../../types/client';
-import { parseJobPeopleBlob, serializeJobPeopleBlob } from '../jobPeople';
+import { parseJobPeopleBlob, serializeJobPeopleBlobForWrite } from '../jobPeople';
 import {
   formatMissionTypesDisplay,
   missionTypesForForm,
   primaryMissionType,
 } from '../jobMissions';
 import { type StoredJobSchedule } from '../jobSchedule';
-import { formatEquipmentDisplay, parseEquipmentFromField } from '../jobEquipment';
+import { formatEquipmentDisplay, formatEquipmentLine, parseEquipmentFromField } from '../jobEquipment';
+import {
+  legacyFieldsFromMissionScopes,
+  missionScopesFromJob,
+} from '../jobMissionScopes';
+import { missionNotesFromJob } from '../jobVisitNotes';
 import { parseStoredVisits, normalizeVisitsList, primaryVisitFields, migrateLegacyOnSiteToVisits, syncJobOnSiteFields } from '../jobVisits';
 import {
   formatPartsSummary,
@@ -21,7 +26,18 @@ import {
   serializeWorkReportsToStorage,
 } from '../jobWorkReports';
 
-const NULLABLE_DATETIMES = ['reminderAt', 'startedAt', 'finishedAt', 'lockedAt'] as const;
+const NULLABLE_DATETIMES = ['reminderAt', 'startedAt', 'finishedAt', 'lockedAt', 'submittedAt', 'reviewedAt'] as const;
+
+/** Must match `scripts/appwrite/schema.mjs` sizes for job_cards. */
+const FIELD_MAX = {
+  contactPhone: 128,
+  missionType: 64,
+  equipment: 256,
+  assignees: 2000,
+  workPerformed: 5000,
+  partsUsed: 2000,
+  notes: 2000,
+} as const;
 const STRING_FIELDS = [
   'reference',
   'clientName',
@@ -49,6 +65,10 @@ const STRING_FIELDS = [
   'lockedBy',
   'notificationId',
   'calendarEventId',
+  'submittedById',
+  'reviewedById',
+  'reviewedByName',
+  'reviewNote',
 ] as const;
 
 interface JobCardDocBase {
@@ -78,13 +98,20 @@ function nullableDate(value: unknown): string | null {
 
 function documentToJobCard(doc: JobCardDocBase): JobCard {
   const people = parseJobPeopleBlob(doc.assignees);
-  const missionTypes = people.missions.length
-    ? people.missions
-    : missionTypesForForm(str(doc.missionType));
+  const missionScopes = people.missionScopes?.length ? people.missionScopes : undefined;
+  const legacyFromScopes = missionScopes ? legacyFieldsFromMissionScopes(missionScopes) : null;
+  const missionTypes = legacyFromScopes?.missionTypes.length
+    ? legacyFromScopes.missionTypes
+    : people.missions.length
+      ? people.missions
+      : missionTypesForForm(str(doc.missionType));
   const workReport = parseWorkReportsFromStorage(str(doc.workPerformed), str(doc.partsUsed));
-  const equipmentItems = people.equipment.length
-    ? people.equipment
-    : parseEquipmentFromField(str(doc.equipment));
+  const equipmentLines = legacyFromScopes?.equipmentItems.length
+    ? legacyFromScopes.equipmentItems
+    : people.equipment.length
+      ? people.equipment.map((name) => ({ name, quantity: null as number | null }))
+      : parseEquipmentFromField(str(doc.equipment)).map((name) => ({ name, quantity: null }));
+  const equipmentItems = equipmentLines.map((line) => formatEquipmentLine(line));
   const visitsRaw = people.schedule?.visits?.length
     ? normalizeVisitsList(people.schedule.visits)
     : parseStoredVisits(null, str(doc.scheduledDate), nullableStr(doc.scheduledTime));
@@ -101,7 +128,19 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     contactPhone: str(doc.contactPhone),
     missionType: formatMissionTypesDisplay(missionTypes) || str(doc.missionType),
     missionTypes,
-    equipment: formatEquipmentDisplay(equipmentItems) || str(doc.equipment),
+    missionScopes: missionScopes ?? missionScopesFromJob({
+      missionTypes,
+      missionType: str(doc.missionType),
+      equipmentItems,
+      equipment: str(doc.equipment),
+      assignees: people.team,
+      assigneeId: nullableStr(doc.assigneeId),
+      assigneeName: nullableStr(doc.assigneeName),
+    }),
+    missionNotes: people.missionNotes?.length
+      ? people.missionNotes
+      : missionNotesFromJob({ missionScopes: missionScopes ?? [] }),
+    equipment: formatEquipmentDisplay(equipmentLines) || str(doc.equipment),
     equipmentItems,
     technicianName: str(doc.technicianName),
     scheduledDate: primaryVisit.scheduledDate || str(doc.scheduledDate),
@@ -121,7 +160,7 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     parentJobId: nullableStr(doc.parentJobId),
     assigneeId: nullableStr(doc.assigneeId),
     assigneeName: nullableStr(doc.assigneeName),
-    assignees: people.team,
+    assignees: legacyFromScopes?.assignees.length ? legacyFromScopes.assignees : people.team,
     jobContacts: people.contacts,
     initialScheduledDate: people.schedule?.initialDate || str(doc.scheduledDate) || null,
     initialScheduledTime: people.schedule?.initialTime ?? nullableStr(doc.scheduledTime),
@@ -139,6 +178,19 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     lockedBy: nullableStr(doc.lockedBy),
     notificationId: nullableStr(doc.notificationId),
     calendarEventId: nullableStr(doc.calendarEventId),
+    reviewStatus:
+      doc.reviewStatus === 'submitted' ||
+      doc.reviewStatus === 'approved' ||
+      doc.reviewStatus === 'rejected'
+        ? doc.reviewStatus
+        : 'none',
+    submittedById: nullableStr(doc.submittedById),
+    submittedAt: nullableDate(doc.submittedAt),
+    reviewedById: nullableStr(doc.reviewedById),
+    reviewedByName: nullableStr(doc.reviewedByName),
+    reviewedAt: nullableDate(doc.reviewedAt),
+    reviewNote: nullableStr(doc.reviewNote),
+    reviewBypassed: Boolean(doc.reviewBypassed),
     photoIds: Array.isArray(doc.photoIds) ? doc.photoIds : [],
     documentIds: Array.isArray(doc.documentIds) ? doc.documentIds : [],
   };
@@ -159,7 +211,11 @@ function normalizeForWrite(
 
   if (job.status !== undefined) out.status = job.status;
   if (job.priority !== undefined) out.priority = job.priority;
-  if (job.clientType !== undefined) out.clientType = job.clientType ?? null;
+  if (job.reviewStatus !== undefined) out.reviewStatus = job.reviewStatus ?? 'none';
+  if (job.reviewBypassed !== undefined) out.reviewBypassed = Boolean(job.reviewBypassed);
+  if (job.clientType === 'person' || job.clientType === 'company') {
+    out.clientType = job.clientType;
+  }
   if (job.photoIds !== undefined) out.photoIds = job.photoIds ?? [];
   if (job.documentIds !== undefined) out.documentIds = job.documentIds ?? [];
   if (job.workReport !== undefined) {
@@ -170,14 +226,57 @@ function normalizeForWrite(
   if (job.equipmentItems !== undefined) {
     out.equipment = formatEquipmentDisplay(job.equipmentItems).slice(0, 256);
   }
-  if (job.assignees !== undefined || job.jobContacts !== undefined || job.missionTypes !== undefined || job.visits !== undefined || job.equipmentItems !== undefined) {
-    out.assignees = serializeJobPeopleBlob({
-      team: job.assignees ?? [],
-      contacts: job.jobContacts ?? [],
-      missions: job.missionTypes ?? missionTypesForForm(typeof job.missionType === 'string' ? job.missionType : ''),
-      equipment: job.equipmentItems ?? [],
-      schedule: buildScheduleBlobForWrite(job),
-    });
+  if (
+    job.assignees !== undefined ||
+    job.jobContacts !== undefined ||
+    job.missionTypes !== undefined ||
+    job.missionScopes !== undefined ||
+    job.missionNotes !== undefined ||
+    job.visits !== undefined ||
+    job.equipmentItems !== undefined
+  ) {
+    const scopes =
+      job.missionScopes ??
+      missionScopesFromJob({
+        missionTypes: job.missionTypes,
+        missionType: typeof job.missionType === 'string' ? job.missionType : '',
+        equipmentItems: job.equipmentItems,
+        equipment: typeof job.equipment === 'string' ? job.equipment : '',
+        assignees: job.assignees,
+        assigneeId: job.assigneeId ?? null,
+        assigneeName: job.assigneeName ?? null,
+      });
+    const legacy = legacyFieldsFromMissionScopes(scopes);
+    out.assignees = serializeJobPeopleBlobForWrite(
+      {
+        team: job.assignees ?? legacy.assignees,
+        contacts: job.jobContacts ?? [],
+        missions: job.missionTypes ?? legacy.missionTypes,
+        equipment: job.equipmentItems ?? legacy.equipmentItems.map((line) => formatEquipmentLine(line)),
+        missionScopes: scopes,
+        missionNotes: job.missionNotes ?? missionNotesFromJob({ missionScopes: scopes }),
+        schedule: buildScheduleBlobForWrite(job),
+      },
+      FIELD_MAX.assignees,
+    );
+    if (job.missionTypes === undefined) {
+      out.missionType = formatMissionTypesDisplay(legacy.missionTypes).slice(0, FIELD_MAX.missionType);
+    }
+    if (job.equipmentItems === undefined) {
+      out.equipment = formatEquipmentDisplay(legacy.equipmentItems).slice(0, 256);
+    }
+  }
+  if (typeof out.contactPhone === 'string') {
+    out.contactPhone = out.contactPhone.slice(0, FIELD_MAX.contactPhone);
+  }
+  if (typeof out.workPerformed === 'string' && out.workPerformed.length > FIELD_MAX.workPerformed) {
+    throw new Error('Work report is too large. Remove attachments or shorten entries.');
+  }
+  if (typeof out.partsUsed === 'string' && out.partsUsed.length > FIELD_MAX.partsUsed) {
+    throw new Error('Parts list is too long.');
+  }
+  if (typeof out.notes === 'string') {
+    out.notes = out.notes.slice(0, FIELD_MAX.notes);
   }
   if (job.missionTypes !== undefined) {
     out.missionType =
@@ -224,20 +323,52 @@ function buildScheduleBlobForWrite(job: Partial<JobCard>): StoredJobSchedule | u
   };
 }
 
-function userPermissions(userId: string, extraReaderIds: string[] = []) {
-  const perms = [
-    Permission.read(Role.user(userId)),
-    Permission.update(Role.user(userId)),
-    Permission.delete(Role.user(userId)),
-    Permission.read(Role.label('admin')),
-    Permission.update(Role.label('admin')),
-    Permission.delete(Role.label('admin')),
+/**
+ * Document ACL the signed-in client may set (no label:admin, no other user:*).
+ * @see Appwrite 401 "Permissions must be one of: (any, users, user:<self>, …)"
+ */
+/** ACL the signed-in client may set on create (no label:* or other users). */
+export function clientCreatePermissions(creatorId: string) {
+  if (!creatorId) return [];
+  return [
+    Permission.read(Role.user(creatorId)),
+    Permission.update(Role.user(creatorId)),
+    Permission.delete(Role.user(creatorId)),
   ];
-  for (const readerId of extraReaderIds) {
-    if (!readerId || readerId === userId) continue;
-    perms.push(Permission.read(Role.user(readerId)));
+}
+
+/** Document owner for ACL sync (creator / lead / assignee). */
+export function jobOwnerUserId(
+  job: Pick<JobCard, 'technicianId' | 'assigneeId' | 'assignees'>,
+): string {
+  if (job.technicianId) return job.technicianId;
+  if (job.assigneeId) return job.assigneeId;
+  const lead = job.assignees?.find((row) => row.role === 'Lead' && row.userId);
+  if (lead?.userId) return lead.userId;
+  return job.assignees?.find((row) => row.userId)?.userId ?? '';
+}
+
+function assigneeIdsFromJob(job: Pick<JobCard, 'assignees' | 'assigneeId'>): string[] {
+  const ids = new Set<string>();
+  for (const row of job.assignees ?? []) {
+    if (row.userId) ids.add(row.userId);
   }
-  return perms;
+  if (job.assigneeId) ids.add(job.assigneeId);
+  return [...ids];
+}
+
+export async function applyJobCardPermissions(
+  documentId: string,
+  ownerId: string,
+  job: Pick<JobCard, 'technicianId' | 'assignees' | 'assigneeId'>,
+): Promise<void> {
+  const resolvedOwner = jobOwnerUserId(job) || ownerId;
+  if (!resolvedOwner || !isAppwriteDatabaseConfigured()) return;
+  await syncJobCardPermissions({
+    documentId,
+    ownerId: resolvedOwner,
+    assigneeIds: assigneeIdsFromJob(job),
+  });
 }
 
 export async function fetchJobCardsFromAppwrite(
@@ -282,36 +413,27 @@ export async function createJobCardInAppwrite(
   job: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt'>,
   userId: string,
 ): Promise<JobCard> {
-  let managerReaders: string[] = [];
-  try {
-    const personnel = await listPersonnel();
-    const members = personnel.map((p) => ({
-      id: p.id,
-      name: p.name,
-      email: p.email,
-      labels: p.labels,
-      position: p.position,
-      managerId: p.managerId ?? '',
-    }));
-    managerReaders = getManagerReadersForAssignees(
-      userId,
-      job.assignees?.map((a) => a.userId).filter(Boolean) ??
-        (job.assigneeId ? [job.assigneeId] : []),
-      members,
-    );
-  } catch {
-    // best-effort — owner + admin permissions still apply
+  const creatorId = (await getCurrentUserId()) ?? userId;
+  if (!creatorId) {
+    throw new Error('Sign in required to save a job card.');
   }
 
-  const doc = await getDatabases().createDocument({
-    databaseId: appwriteConfig.databaseId,
-    collectionId: appwriteConfig.jobCardsCollectionId,
-    documentId: ID.unique(),
-    data: normalizeForWrite(job, userId),
-    permissions: userPermissions(userId, managerReaders),
-  });
+  let created: JobCard;
+  try {
+    const doc = await getDatabases().createDocument({
+      databaseId: appwriteConfig.databaseId,
+      collectionId: appwriteConfig.jobCardsCollectionId,
+      documentId: ID.unique(),
+      data: normalizeForWrite(job, creatorId),
+      permissions: clientCreatePermissions(creatorId),
+    });
+    created = documentToJobCard(doc as unknown as JobCardDocBase);
+  } catch (error) {
+    throw new Error(formatAppwriteError(error));
+  }
 
-  return documentToJobCard(doc as unknown as JobCardDocBase);
+  void applyJobCardPermissions(created.id, creatorId, job).catch(() => undefined);
+  return created;
 }
 
 export async function updateJobCardInAppwrite(
@@ -319,20 +441,72 @@ export async function updateJobCardInAppwrite(
   updates: Partial<JobCard>,
 ): Promise<void> {
   const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = updates;
-  await getDatabases().updateDocument({
-    databaseId: appwriteConfig.databaseId,
-    collectionId: appwriteConfig.jobCardsCollectionId,
-    documentId: id,
-    data: normalizeForWrite(rest),
-  });
+  try {
+    await getDatabases().updateDocument({
+      databaseId: appwriteConfig.databaseId,
+      collectionId: appwriteConfig.jobCardsCollectionId,
+      documentId: id,
+      data: normalizeForWrite(rest),
+    });
+  } catch (error) {
+    throw new Error(formatAppwriteError(error));
+  }
 }
 
-export async function deleteJobCardFromAppwrite(id: string): Promise<void> {
-  await getDatabases().deleteDocument({
-    databaseId: appwriteConfig.databaseId,
-    collectionId: appwriteConfig.jobCardsCollectionId,
-    documentId: id,
-  });
+export async function deleteJobCardFromAppwrite(
+  id: string,
+  job?: Pick<
+    JobCard,
+    | 'technicianId'
+    | 'assignees'
+    | 'assigneeId'
+    | 'reviewStatus'
+    | 'status'
+    | 'lockedAt'
+  >,
+): Promise<void> {
+  const attempt = () =>
+    getDatabases().deleteDocument({
+      databaseId: appwriteConfig.databaseId,
+      collectionId: appwriteConfig.jobCardsCollectionId,
+      documentId: id,
+    });
+
+  try {
+    await attempt();
+    return;
+  } catch (clientError) {
+    if (!job) {
+      throw new Error(formatAppwriteError(clientError));
+    }
+    const ownerId = jobOwnerUserId(job) || job.technicianId;
+    if (!ownerId) {
+      throw new Error(formatAppwriteError(clientError));
+    }
+    try {
+      await deleteJobCardViaAdmin({
+        documentId: id,
+        ownerId,
+        assigneeIds: assigneeIdsFromJob(job),
+        reviewStatus: job.reviewStatus,
+        status: job.status,
+        lockedAt: job.lockedAt,
+      });
+      return;
+    } catch (adminError) {
+      try {
+        await applyJobCardPermissions(id, ownerId, job);
+        await attempt();
+        return;
+      } catch {
+        const message =
+          adminError instanceof Error
+            ? adminError.message
+            : formatAppwriteError(adminError);
+        throw new Error(message);
+      }
+    }
+  }
 }
 
 export async function getCurrentUserId(): Promise<string | null> {

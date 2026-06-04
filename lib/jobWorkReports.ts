@@ -17,6 +17,7 @@ export interface WorkReportItem {
 export interface StoredWorkReport {
   workItems: WorkReportItem[];
   partItems: WorkReportItem[];
+  noteItems: WorkReportItem[];
 }
 
 export interface WorkReportTextEntry {
@@ -30,6 +31,7 @@ export interface WorkReportTextEntry {
 export interface WorkReportFormState {
   workItems: WorkReportTextEntry[];
   partItems: WorkReportTextEntry[];
+  noteItems: WorkReportTextEntry[];
 }
 
 export interface WorkReportGroupItem {
@@ -43,12 +45,14 @@ export interface WorkReportVisitGroup {
   visitLabel: string;
   workItems: WorkReportGroupItem[];
   partItems: WorkReportGroupItem[];
+  noteItems: WorkReportGroupItem[];
 }
 
 interface WorkReportBlobV3 {
   v: 3;
   work: WorkReportItem[];
   parts: WorkReportItem[];
+  notes?: WorkReportItem[];
 }
 
 interface WorkReportBlobV2 {
@@ -106,6 +110,7 @@ export function defaultWorkReportFormState(defaultVisitId: string | null = null)
   return {
     workItems: [defaultTextEntry('work', defaultVisitId)],
     partItems: [defaultTextEntry('part', defaultVisitId)],
+    noteItems: [defaultTextEntry('note', defaultVisitId)],
   };
 }
 
@@ -127,6 +132,14 @@ export function normalizeWorkReportForm(state: WorkReportFormState): StoredWorkR
         documentIds: entry.documentIds,
       })),
     ),
+    noteItems: normalizeItems(
+      state.noteItems.map((entry) => ({
+        text: entry.text,
+        visitId: entry.visitId,
+        photoIds: [],
+        documentIds: [],
+      })),
+    ),
   };
 }
 
@@ -139,7 +152,7 @@ function parseLegacySectionBlob(parsed: WorkReportBlobV1): StoredWorkReport {
     if (work) workItems.push({ text: work });
     if (parts) partItems.push({ text: parts });
   }
-  return { workItems, partItems };
+  return { workItems, partItems, noteItems: [] };
 }
 
 function parseBlobItems(raw: unknown): WorkReportItem[] {
@@ -186,12 +199,14 @@ export function parseWorkReportsFromStorage(
         return {
           workItems: parseBlobItems(parsed.work),
           partItems: parseBlobItems(parsed.parts),
+          noteItems: parseBlobItems(parsed.notes ?? []),
         };
       }
       if (parsed && typeof parsed === 'object' && 'v' in parsed && parsed.v === 2) {
         return {
           workItems: parseBlobItems(parsed.work),
           partItems: parseBlobItems(parsed.parts),
+          noteItems: [],
         };
       }
       if (parsed && typeof parsed === 'object' && Array.isArray((parsed as WorkReportBlobV1).entries)) {
@@ -205,6 +220,7 @@ export function parseWorkReportsFromStorage(
   return {
     workItems: trimmedWork ? [{ text: trimmedWork }] : [],
     partItems: trimmedParts ? [{ text: trimmedParts }] : [],
+    noteItems: [],
   };
 }
 
@@ -240,11 +256,20 @@ export function workReportFormState(
           documentIds: normalizeAttachmentIds(item.documentIds),
         }))
       : [defaultTextEntry('part', defaultVisitId)],
+    noteItems: report.noteItems.length
+      ? report.noteItems.map((item) => ({
+          key: newContactKey('note'),
+          text: item.text,
+          visitId: item.visitId ?? null,
+          photoIds: [],
+          documentIds: [],
+        }))
+      : [defaultTextEntry('note', defaultVisitId)],
   };
 }
 
 function hasVisitLinks(report: StoredWorkReport): boolean {
-  return [...report.workItems, ...report.partItems].some((item) => item.visitId);
+  return [...report.workItems, ...report.partItems, ...report.noteItems].some((item) => item.visitId);
 }
 
 function hasAttachments(report: StoredWorkReport): boolean {
@@ -257,6 +282,7 @@ function isSimpleLegacyReport(report: StoredWorkReport): boolean {
   return (
     report.workItems.length <= 1 &&
     report.partItems.length <= 1 &&
+    report.noteItems.length === 0 &&
     !hasVisitLinks(report) &&
     !hasAttachments(report)
   );
@@ -267,19 +293,23 @@ export function serializeWorkReportsToStorage(
 ): { workPerformed: string; partsUsed: string } {
   const workItems = normalizeItems(report.workItems);
   const partItems = normalizeItems(report.partItems);
-  if (workItems.length === 0 && partItems.length === 0) {
+  const noteItems = normalizeItems(report.noteItems);
+  if (workItems.length === 0 && partItems.length === 0 && noteItems.length === 0) {
     return { workPerformed: '', partsUsed: '' };
   }
 
-  if (isSimpleLegacyReport({ workItems, partItems })) {
+  if (isSimpleLegacyReport({ workItems, partItems, noteItems })) {
     return {
       workPerformed: workItems[0]?.text ?? '',
       partsUsed: partItems[0]?.text ?? '',
     };
   }
 
+  const payload: WorkReportBlobV3 = { v: 3, work: workItems, parts: partItems };
+  if (noteItems.length) payload.notes = noteItems;
+
   return {
-    workPerformed: JSON.stringify({ v: 3, work: workItems, parts: partItems }),
+    workPerformed: JSON.stringify(payload),
     partsUsed: formatWorkReportItemsList(partItems),
   };
 }
@@ -319,6 +349,10 @@ export function formatPartsSummary(report: StoredWorkReport, visits: StoredJobVi
   return formatWorkReportItemsList(report.partItems, visits);
 }
 
+export function formatNotesSummary(report: StoredWorkReport, visits: StoredJobVisit[] = []): string {
+  return formatWorkReportItemsList(report.noteItems, visits);
+}
+
 export function groupWorkReportByVisit(
   report: StoredWorkReport,
   visits: StoredJobVisit[],
@@ -332,6 +366,7 @@ export function groupWorkReportByVisit(
         visitLabel: visitLinkLabel(visits, visitId),
         workItems: [],
         partItems: [],
+        noteItems: [],
       });
     }
     return groups.get(visitId)!;
@@ -351,6 +386,13 @@ export function groupWorkReportByVisit(
       documentIds: normalizeAttachmentIds(item.documentIds),
     });
   }
+  for (const item of normalizeItems(report.noteItems)) {
+    ensureGroup(item.visitId ?? null).noteItems.push({
+      text: item.text,
+      photoIds: [],
+      documentIds: [],
+    });
+  }
 
   const orderedIds = [
     ...visits.map((visit) => visit.id),
@@ -362,7 +404,8 @@ export function groupWorkReportByVisit(
     .filter(
       (group) =>
         group.workItems.some((item) => workReportItemHasContent(item)) ||
-        group.partItems.some((item) => workReportItemHasContent(item)),
+        group.partItems.some((item) => workReportItemHasContent(item)) ||
+        group.noteItems.some((item) => workReportItemHasContent(item)),
     );
 }
 

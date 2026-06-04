@@ -69,8 +69,47 @@ async function ensureCollection(databases, def) {
   }
 }
 
-async function ensureAttribute(databases, collectionId, attr, existingKeys) {
+async function ensureAttribute(databases, collectionId, attr, existingKeys, existingAttrs = []) {
+  const current = existingAttrs.find((row) => row.key === attr.key);
   if (existingKeys.has(attr.key)) {
+    if (attr.type === 'enum') {
+      const remote = [...(current?.elements ?? [])];
+      const missing = attr.elements.filter((element) => !remote.includes(element));
+      if (missing.length > 0) {
+        const nextElements = [
+          ...remote,
+          ...attr.elements.filter((element) => !remote.includes(element)),
+        ];
+        console.log(`  update enum: ${attr.key} (+${missing.join(', ')})`);
+        const enumDefault =
+          current?.default ?? attr.default ?? (attr.required ? null : undefined);
+        await databases.updateEnumAttribute(
+          APPWRITE.databaseId,
+          collectionId,
+          attr.key,
+          nextElements,
+          Boolean(attr.required),
+          enumDefault,
+        );
+        await sleep(2000);
+        return;
+      }
+      console.log(`  skip enum: ${attr.key}`);
+      return;
+    }
+    if (attr.type === 'string' && current?.size && attr.size > current.size) {
+      console.log(`  resize string: ${attr.key} (${current.size} → ${attr.size})`);
+      await databases.updateStringAttribute(
+        APPWRITE.databaseId,
+        collectionId,
+        attr.key,
+        Boolean(attr.required),
+        current.default ?? attr.default ?? '',
+        attr.size,
+      );
+      await sleep(2000);
+      return;
+    }
     console.log(`  skip ${attr.type}: ${attr.key}`);
     return;
   }
@@ -163,7 +202,13 @@ async function syncCollection(databases, def) {
   const existingAttrKeys = new Set((colWithAttrs.attributes ?? []).map((a) => a.key));
   console.log('  attributes:');
   for (const attr of def.attributes) {
-    await ensureAttribute(databases, def.id, attr, existingAttrKeys);
+    await ensureAttribute(
+      databases,
+      def.id,
+      attr,
+      existingAttrKeys,
+      colWithAttrs.attributes ?? [],
+    );
   }
 
   const ready = await waitForAttributes(databases, def.id);

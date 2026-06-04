@@ -145,8 +145,14 @@ async function runListAppDevs() {
   }
 }
 
+async function runSyncFunctions() {
+  console.log('\nFunctions:');
+  await syncFunctions();
+}
+
 const handlers = {
   sync: runSync,
+  'sync-functions': runSyncFunctions,
   status: runStatus,
   'set-admin': runSetAdmin,
   'unset-admin': runUnsetAdmin,

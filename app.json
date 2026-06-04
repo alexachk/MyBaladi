@@ -102,7 +102,8 @@
         {
           "contactsPermission": "Import client contact details into job cards."
         }
-      ]
+      ],
+      "expo-mail-composer"
     ],
     "extra": {
       "router": {},

@@ -78,7 +78,15 @@ async function sendExpoPush(messages) {
 export default async ({ req, res, log, error }) => {
   const event = req.headers['x-appwrite-event'] ?? '';
   if (!event.includes('.create')) {
-    return res.json({ ok: true, skipped: true });
+    // Scheduled (event-less) run = keep-alive ping. A tiny authenticated read
+    // registers activity so the free-tier project is not auto-paused.
+    try {
+      await new Users(adminClient()).list([Query.limit(1)]);
+      log(`keep-alive ping @ ${new Date().toISOString()}`);
+    } catch (e) {
+      error(`keep-alive ping failed: ${e?.message ?? String(e)}`);
+    }
+    return res.json({ ok: true, keepAlive: true });
   }
 
   let doc;

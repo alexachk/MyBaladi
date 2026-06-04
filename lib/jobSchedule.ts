@@ -1,17 +1,25 @@
-import type { JobCard } from '../types/jobCard';
+import type { JobCard, JobStatus } from '../types/jobCard';
 import { formatDate } from '../utils/formatDate';
 import {
+  computeActualVisitDurationMinutes,
+  formatVisitOnSiteStamp,
+} from './visitDuration';
+import {
+  defaultVisitNumberLabel,
   ensureVisitShape,
   nextScheduledVisit,
   normalizeVisitsList,
   parseStoredVisits,
+  patchVisitInList,
   primaryVisitFields,
+  visitInProgress,
+  visitStatus,
   type StoredJobVisit,
 } from './jobVisits';
 
 export type { StoredJobVisit };
 
-export type ScheduleLogAction = 'rescheduled' | 'done' | 'added';
+export type ScheduleLogAction = 'rescheduled' | 'done' | 'added' | 'launched';
 
 export interface ScheduleLogEntry {
   at: string;
@@ -24,6 +32,11 @@ export interface ScheduleLogEntry {
   note?: string;
   action?: ScheduleLogAction;
   visitId?: string;
+  /** Stamped at launch / finish (HH:mm). */
+  arrivalTime?: string;
+  departureTime?: string;
+  actualDurationMinutes?: number;
+  plannedDurationMinutes?: number;
 }
 
 export interface StoredJobSchedule {
@@ -52,12 +65,29 @@ export function parseStoredSchedule(raw: unknown): StoredJobSchedule | undefined
           toTime: typeof entry.toTime === 'string' ? entry.toTime : null,
           note: typeof entry.note === 'string' && entry.note.trim() ? entry.note.trim() : undefined,
           action:
-            entry.action === 'rescheduled' || entry.action === 'done' || entry.action === 'added'
+            entry.action === 'rescheduled' ||
+            entry.action === 'done' ||
+            entry.action === 'added' ||
+            entry.action === 'launched'
               ? entry.action
               : undefined,
           visitId: typeof entry.visitId === 'string' && entry.visitId.trim() ? entry.visitId.trim() : undefined,
+          arrivalTime:
+            typeof entry.arrivalTime === 'string' && entry.arrivalTime.trim() ? entry.arrivalTime.trim() : undefined,
+          departureTime:
+            typeof entry.departureTime === 'string' && entry.departureTime.trim()
+              ? entry.departureTime.trim()
+              : undefined,
+          actualDurationMinutes:
+            typeof entry.actualDurationMinutes === 'number' && Number.isFinite(entry.actualDurationMinutes)
+              ? entry.actualDurationMinutes
+              : undefined,
+          plannedDurationMinutes:
+            typeof entry.plannedDurationMinutes === 'number' && Number.isFinite(entry.plannedDurationMinutes)
+              ? entry.plannedDurationMinutes
+              : undefined,
         } satisfies ScheduleLogEntry))
-        .filter((entry) => entry.toDate || entry.action === 'done')
+        .filter((entry) => entry.toDate || entry.action === 'done' || entry.action === 'launched')
     : [];
 
   return {
@@ -104,12 +134,54 @@ export function formatScheduleWhen(date: string, time: string | null | undefined
   return time ? `${label} · ${time}` : label;
 }
 
-export function formatScheduleLogEntry(entry: ScheduleLogEntry): string {
+export function resolveScheduleLogOnSiteFields(
+  entry: ScheduleLogEntry,
+  visits?: StoredJobVisit[],
+): Pick<ScheduleLogEntry, 'arrivalTime' | 'departureTime' | 'plannedDurationMinutes' | 'actualDurationMinutes'> {
+  const visit = entry.visitId && visits?.length ? visits.find((v) => v.id === entry.visitId) : undefined;
+  const arrival = entry.arrivalTime ?? visit?.arrivalTime;
+  const departure = entry.departureTime ?? visit?.departureTime;
+  const planned = entry.plannedDurationMinutes ?? visit?.durationMinutes;
+  const actual =
+    entry.actualDurationMinutes ??
+    computeActualVisitDurationMinutes(arrival, departure) ??
+    undefined;
+  return {
+    arrivalTime: arrival,
+    departureTime: departure,
+    plannedDurationMinutes: planned,
+    actualDurationMinutes: actual ?? undefined,
+  };
+}
+
+export function formatScheduleLogOnSiteDetail(
+  entry: ScheduleLogEntry,
+  visits?: StoredJobVisit[],
+): string {
+  if (entry.action === 'launched') {
+    const arrived = entry.arrivalTime?.trim();
+    return arrived ? `arrived ${arrived}` : '';
+  }
+  const resolved = resolveScheduleLogOnSiteFields(entry, visits);
+  return formatVisitOnSiteStamp(
+    resolved.arrivalTime,
+    resolved.departureTime,
+    resolved.plannedDurationMinutes,
+  );
+}
+
+export function formatScheduleLogEntry(entry: ScheduleLogEntry, visits?: StoredJobVisit[]): string {
+  const when = formatScheduleWhen(entry.toDate || entry.fromDate, entry.toTime ?? entry.fromTime);
+  const onSite = formatScheduleLogOnSiteDetail(entry, visits);
+
   if (entry.action === 'done') {
-    return `Visit done · ${formatScheduleWhen(entry.toDate || entry.fromDate, entry.toTime ?? entry.fromTime)}`;
+    return onSite ? `Visit done · ${when} · ${onSite}` : `Visit done · ${when}`;
+  }
+  if (entry.action === 'launched') {
+    return onSite ? `Visit launched · ${when} · ${onSite}` : `Visit launched · ${when}`;
   }
   if (entry.action === 'added') {
-    return `Follow-up visit · ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
+    return `Visit added · ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
   }
   return `${formatScheduleWhen(entry.fromDate, entry.fromTime)} → ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
 }
@@ -156,6 +228,20 @@ export function appendScheduleLog(
   };
 }
 
+/** Remove the latest launch row for a visit (stop / undo mistaken launch). */
+export function removeLaunchedLogForVisit(
+  log: ScheduleLogEntry[],
+  visitId: string,
+): ScheduleLogEntry[] {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const entry = log[i];
+    if (entry.action === 'launched' && entry.visitId === visitId) {
+      return [...log.slice(0, i), ...log.slice(i + 1)];
+    }
+  }
+  return log;
+}
+
 function resolveVisits(job: Pick<JobCard, 'scheduledDate' | 'scheduledTime' | 'visits'>): StoredJobVisit[] {
   return normalizeVisitsList(
     job.visits?.length
@@ -164,7 +250,7 @@ function resolveVisits(job: Pick<JobCard, 'scheduledDate' | 'scheduledTime' | 'v
   );
 }
 
-function schedulePayloadFromVisits(
+export function schedulePayloadFromVisits(
   job: Pick<
     JobCard,
     'scheduledDate' | 'scheduledTime' | 'initialScheduledDate' | 'initialScheduledTime' | 'scheduleLog' | 'visits'
@@ -219,8 +305,9 @@ export function buildRescheduleVisitUpdates(
   const newVisit = ensureVisitShape({
     date: toDate,
     time: toTime,
-    label: from.label ? `${from.label} (follow-up)` : undefined,
+    label: defaultVisitNumberLabel(visits),
     status: 'scheduled',
+    durationMinutes: from.durationMinutes,
     location: from.location,
     latitude: from.latitude,
     longitude: from.longitude,
@@ -302,35 +389,105 @@ export function buildAddFollowUpVisitUpdates(
     | 'scheduleLog'
     | 'visits'
   >,
-  toDate: string,
-  toTime: string | null,
+  newVisit: StoredJobVisit,
   actor: { id: string; name: string },
-  label?: string,
 ): Pick<
   JobCard,
   'scheduledDate' | 'scheduledTime' | 'initialScheduledDate' | 'initialScheduledTime' | 'scheduleLog' | 'visits'
 > {
   const visits = resolveVisits(job);
-  const newVisit = ensureVisitShape({
-    date: toDate,
-    time: toTime,
-    label: label?.trim() || `Follow-up ${visits.filter((visit) => visit.status !== 'rescheduled').length + 1}`,
+  const visit = ensureVisitShape({
+    ...newVisit,
     status: 'scheduled',
+    label:
+      newVisit.label?.trim() || defaultVisitNumberLabel(visits),
   });
-  const updatedVisits = [...visits, newVisit];
+  const updatedVisits = [...visits, visit];
 
   const schedule = appendScheduleLog(resolveStoredSchedule({ ...job, visits: updatedVisits }), {
     userId: actor.id,
     userName: actor.name,
     fromDate: '',
     fromTime: null,
-    toDate,
-    toTime,
+    toDate: visit.date,
+    toTime: visit.time,
     action: 'added',
-    visitId: newVisit.id,
+    visitId: visit.id,
   });
 
   return schedulePayloadFromVisits({ ...job, scheduleLog: schedule.log }, updatedVisits);
+}
+
+export function canDeleteVisitFromTimeline(
+  visits: StoredJobVisit[],
+  visitId: string,
+): { ok: true } | { ok: false; reason: string } {
+  if (visits.length <= 1) {
+    return { ok: false, reason: 'Keep at least one visit on this job card.' };
+  }
+  const target = visits.find((visit) => visit.id === visitId);
+  if (!target) return { ok: false, reason: 'Visit not found.' };
+  const status = visitStatus(target);
+  if (status === 'in_progress') {
+    return { ok: false, reason: 'Stop the visit before removing it.' };
+  }
+  if (status === 'done') {
+    return {
+      ok: false,
+      reason: 'Completed visits stay in history. Undo from schedule history if needed.',
+    };
+  }
+  if (status === 'rescheduled') {
+    return { ok: false, reason: 'This visit was rescheduled — remove the new visit instead.' };
+  }
+  if (visits.some((visit) => visit.rescheduledToId === visitId)) {
+    return {
+      ok: false,
+      reason: 'Remove the new visit created by reschedule first.',
+    };
+  }
+  if (status !== 'scheduled') {
+    return { ok: false, reason: 'Only planned visits can be removed.' };
+  }
+  return { ok: true };
+}
+
+export function buildDeleteVisitUpdates(
+  job: Pick<
+    JobCard,
+    | 'scheduledDate'
+    | 'scheduledTime'
+    | 'initialScheduledDate'
+    | 'initialScheduledTime'
+    | 'scheduleLog'
+    | 'visits'
+    | 'status'
+    | 'startedAt'
+    | 'finishedAt'
+  >,
+  visitId: string,
+): Pick<
+  JobCard,
+  | 'scheduledDate'
+  | 'scheduledTime'
+  | 'initialScheduledDate'
+  | 'initialScheduledTime'
+  | 'scheduleLog'
+  | 'visits'
+  | 'status'
+  | 'startedAt'
+  | 'finishedAt'
+  | 'arrivalTime'
+  | 'departureTime'
+> {
+  const visits = resolveVisits(job);
+  const gate = canDeleteVisitFromTimeline(visits, visitId);
+  if (!gate.ok) throw new Error(gate.reason);
+
+  const updatedVisits = visits.filter((visit) => visit.id !== visitId);
+  const log = (job.scheduleLog ?? []).filter((entry) => entry.visitId !== visitId);
+  const payload = schedulePayloadFromVisits({ ...job, scheduleLog: log }, updatedVisits);
+  return { ...payload, ...deriveJobStatusAfterVisits(updatedVisits, job) };
 }
 
 /** @deprecated Use buildRescheduleVisitUpdates */
@@ -368,4 +525,151 @@ export function reminderAtFromSchedule(
   const offsetMs = previousScheduledAt.getTime() - previousReminder.getTime();
   if (offsetMs <= 0) return null;
   return new Date(nextScheduledAt.getTime() - offsetMs).toISOString();
+}
+
+function remainingScheduledCount(visits: StoredJobVisit[]): number {
+  return visits.filter((visit) => visitStatus(visit) === 'scheduled').length;
+}
+
+function deriveJobStatusAfterVisits(
+  visits: StoredJobVisit[],
+  job: Pick<JobCard, 'status' | 'startedAt' | 'finishedAt'>,
+): Pick<JobCard, 'status' | 'startedAt' | 'finishedAt' | 'arrivalTime' | 'departureTime'> {
+  const stillOpen = visitInProgress(visits);
+  const anyDone = visits.some((visit) => visitStatus(visit) === 'done');
+  const moreScheduled = remainingScheduledCount(visits);
+  const onSite = stillOpen
+    ? { arrivalTime: stillOpen.arrivalTime ?? '', departureTime: '' }
+    : { arrivalTime: '', departureTime: '' };
+
+  let status: JobStatus;
+  if (stillOpen) status = 'in_progress';
+  else if (anyDone) status = 'pending_review';
+  else if (moreScheduled > 0) status = job.status === 'draft' ? 'draft' : 'planned';
+  else status = job.status === 'draft' ? 'draft' : 'planned';
+
+  return {
+    status,
+    startedAt: stillOpen || anyDone ? job.startedAt : null,
+    finishedAt: stillOpen || moreScheduled > 0 ? null : job.finishedAt ?? null,
+    ...onSite,
+  };
+}
+
+/** Remove one schedule-log row and undo its visit/schedule side effects. */
+export function buildRemoveScheduleLogEntryUpdates(
+  job: Pick<
+    JobCard,
+    | 'scheduledDate'
+    | 'scheduledTime'
+    | 'initialScheduledDate'
+    | 'initialScheduledTime'
+    | 'scheduleLog'
+    | 'visits'
+    | 'status'
+    | 'startedAt'
+    | 'finishedAt'
+  >,
+  logIndex: number,
+): Pick<
+  JobCard,
+  | 'scheduledDate'
+  | 'scheduledTime'
+  | 'initialScheduledDate'
+  | 'initialScheduledTime'
+  | 'scheduleLog'
+  | 'visits'
+  | 'status'
+  | 'startedAt'
+  | 'finishedAt'
+  | 'arrivalTime'
+  | 'departureTime'
+> {
+  const log = [...(job.scheduleLog ?? [])];
+  if (logIndex < 0 || logIndex >= log.length) {
+    throw new Error('Schedule history entry not found.');
+  }
+
+  const entry = log[logIndex];
+  let visits = resolveVisits(job);
+  const action =
+    entry.action ??
+    (entry.fromDate && entry.toDate && entry.fromDate !== entry.toDate ? 'rescheduled' : undefined);
+
+  if (action === 'launched' && entry.visitId) {
+    const target = visits.find((visit) => visit.id === entry.visitId);
+    if (!target) {
+      throw new Error('Visit for this history entry no longer exists.');
+    }
+    if (visitStatus(target) !== 'in_progress' && !(target.arrivalTime && !target.departureTime)) {
+      throw new Error('This launch cannot be undone — the visit is no longer on site.');
+    }
+    visits = patchVisitInList(visits, entry.visitId, {
+      status: 'scheduled',
+      arrivalTime: undefined,
+      departureTime: undefined,
+      completedAt: undefined,
+    });
+  } else if (action === 'done' && entry.visitId) {
+    const target = visits.find((visit) => visit.id === entry.visitId);
+    if (!target) {
+      throw new Error('Visit for this history entry no longer exists.');
+    }
+    if (visitStatus(target) === 'in_progress') {
+      visits = patchVisitInList(visits, entry.visitId, {
+        status: 'scheduled',
+        arrivalTime: undefined,
+        departureTime: undefined,
+        completedAt: undefined,
+      });
+    } else if (visitStatus(target) === 'done') {
+      visits = patchVisitInList(visits, entry.visitId, {
+        status: 'scheduled',
+        arrivalTime: undefined,
+        departureTime: undefined,
+        completedAt: undefined,
+      });
+    } else {
+      throw new Error('This visit cannot be reopened from history.');
+    }
+  } else if (action === 'rescheduled' && entry.visitId) {
+    const oldVisit = visits.find((visit) => visit.id === entry.visitId);
+    if (!oldVisit) {
+      throw new Error('Visit for this history entry no longer exists.');
+    }
+    const followUpId = oldVisit.rescheduledToId;
+    if (followUpId) {
+      const followUp = visits.find((visit) => visit.id === followUpId);
+      if (followUp && visitStatus(followUp) !== 'scheduled') {
+        throw new Error('Remove later history first — that visit is already in progress or done.');
+      }
+      visits = visits.filter((visit) => visit.id !== followUpId);
+    }
+    visits = patchVisitInList(visits, entry.visitId, {
+      status: 'scheduled',
+      date: entry.fromDate || oldVisit.date,
+      time: entry.fromTime ?? oldVisit.time ?? null,
+      rescheduledToId: undefined,
+      arrivalTime: undefined,
+      departureTime: undefined,
+      completedAt: undefined,
+    });
+  } else if (action === 'added' && entry.visitId) {
+    const added = visits.find((visit) => visit.id === entry.visitId);
+    if (!added) {
+      log.splice(logIndex, 1);
+      const payload = schedulePayloadFromVisits({ ...job, scheduleLog: log }, visits);
+      return { ...payload, ...deriveJobStatusAfterVisits(visits, job) };
+    }
+    if (visitStatus(added) !== 'scheduled') {
+      throw new Error('Remove later history first — this visit is no longer only scheduled.');
+    }
+    visits = visits.filter((visit) => visit.id !== entry.visitId);
+  } else if (action) {
+    throw new Error('This history entry cannot be removed.');
+  }
+
+  log.splice(logIndex, 1);
+  const payload = schedulePayloadFromVisits({ ...job, scheduleLog: log }, visits);
+  return { ...payload, ...deriveJobStatusAfterVisits(visits, job) };
 }

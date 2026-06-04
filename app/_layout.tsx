@@ -1,3 +1,5 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
 import { ActivityIndicator, LogBox, StyleSheet, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
@@ -79,7 +81,8 @@ function RootNavigator() {
           name="job/new"
           options={{ headerShown: false, title: 'New Job Card', presentation: 'modal' }}
         />
-        <Stack.Screen name="job/[id]" options={{ title: 'Job Card' }} />
+        <Stack.Screen name="job/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="stats" options={{ headerShown: false }} />
         <Stack.Screen name="job/sign/[id]" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen name="clients" options={{ headerShown: false }} />
@@ -90,6 +93,18 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  const [iconsLoaded] = useFonts(Ionicons.font);
+
+  if (!iconsLoaded) {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.loader}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <SplashGate durationMs={2500}>

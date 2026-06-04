@@ -1,10 +1,10 @@
+import { type Ref } from 'react';
 import {
   StyleSheet,
   Text,
   TextInput,
   TextInputProps,
   View,
-  type Ref,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';

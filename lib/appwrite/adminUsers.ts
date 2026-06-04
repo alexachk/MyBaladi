@@ -1,5 +1,5 @@
 import { getAppwriteClient } from './client';
-import { ADMIN_USERS_FUNCTION_ID, APPWRITE_ENDPOINT } from './config';
+import { ADMIN_USERS_FUNCTION_ID, APPWRITE_ENDPOINT, appwriteConfig } from './config';
 
 export type AdminUser = {
   id: string;
@@ -37,7 +37,16 @@ async function executeAdmin<T extends Record<string, unknown>>(
   )) as Execution;
 
   if (execution.status === 'failed') {
-    throw new Error(execution.errors || 'Function execution failed.');
+    let detail = execution.errors?.trim() || '';
+    if (!detail && execution.responseBody) {
+      try {
+        const parsed = JSON.parse(execution.responseBody) as { error?: string };
+        detail = parsed.error?.trim() || execution.responseBody;
+      } catch {
+        detail = execution.responseBody;
+      }
+    }
+    throw new Error(detail || 'Function execution failed.');
   }
 
   let payload: (AdminResponse<Record<string, unknown>> & T) | AdminError;
@@ -148,4 +157,70 @@ export type Personnel = {
 export async function listPersonnel(): Promise<Personnel[]> {
   const result = await executeAdmin<{ personnel: Personnel[] }>({ action: 'list-personnel' });
   return result.personnel;
+}
+
+/** Server-side ACL — client SDK cannot grant other users read/update on documents. */
+export async function syncJobCardPermissions(input: {
+  documentId: string;
+  ownerId: string;
+  assigneeIds: string[];
+}): Promise<void> {
+  await executeAdmin<Record<string, never>>({
+    action: 'sync-job-permissions',
+    documentId: input.documentId,
+    ownerId: input.ownerId,
+    assigneeIds: input.assigneeIds,
+    databaseId: appwriteConfig.databaseId,
+    collectionId: appwriteConfig.jobCardsCollectionId,
+  });
+}
+
+/** Server-side ACL for recap log — client cannot set label:admin or other users on create. */
+export async function syncJobRecapPermissions(input: {
+  documentId: string;
+  ownerId: string;
+  readerIds: string[];
+}): Promise<void> {
+  await executeAdmin<Record<string, never>>({
+    action: 'sync-recap-permissions',
+    documentId: input.documentId,
+    ownerId: input.ownerId,
+    readerIds: input.readerIds,
+    databaseId: appwriteConfig.databaseId,
+    collectionId: appwriteConfig.jobRecapsCollectionId,
+  });
+}
+
+/** Server-side delete when client ACL lacks delete permission. */
+export async function deleteClientViaAdmin(input: {
+  documentId: string;
+  collectionId: string;
+}): Promise<void> {
+  await executeAdmin<Record<string, never>>({
+    action: 'delete-client',
+    documentId: input.documentId,
+    databaseId: appwriteConfig.databaseId,
+    collectionId: input.collectionId,
+  });
+}
+
+export async function deleteJobCardViaAdmin(input: {
+  documentId: string;
+  ownerId: string;
+  assigneeIds: string[];
+  reviewStatus?: string;
+  status?: string;
+  lockedAt?: string | null;
+}): Promise<void> {
+  await executeAdmin<Record<string, never>>({
+    action: 'delete-job-card',
+    documentId: input.documentId,
+    ownerId: input.ownerId,
+    assigneeIds: input.assigneeIds,
+    databaseId: appwriteConfig.databaseId,
+    collectionId: appwriteConfig.jobCardsCollectionId,
+    reviewStatus: input.reviewStatus ?? 'none',
+    status: input.status ?? '',
+    lockedAt: input.lockedAt ?? '',
+  });
 }

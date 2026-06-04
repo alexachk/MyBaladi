@@ -84,7 +84,9 @@ export default function SettingsScreen() {
 
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials(user?.name ?? user?.email ?? '?')}</Text>
+            <Text style={styles.avatarText}>
+              {initials((user?.name || user?.email || '').trim())}
+            </Text>
           </View>
           <View style={styles.profileBody}>
             <View style={styles.profileNameRow}>
@@ -117,6 +119,20 @@ export default function SettingsScreen() {
             />
           </Section>
         ) : null}
+
+        <Section title="Activity">
+          <Row
+            icon="stats-chart-outline"
+            label="Your activity"
+            description={
+              isAdmin
+                ? 'Jobs, visits, and recaps across the team'
+                : 'Jobs, visits, and recaps for you and your team'
+            }
+            onPress={() => router.push('/stats')}
+            chevron
+          />
+        </Section>
 
         <Section title="Security">
           <Row

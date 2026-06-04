@@ -1,7 +1,12 @@
 import type { JobCard } from '../types/jobCard';
 import { normalizeVisitsList } from './jobVisits';
 
+/** draft = information / non-binding · final = official signed-off version */
+export type RecapDocumentType = 'draft' | 'final';
+
 export interface JobRecapExportOptions {
+  /** Information / draft vs. final official document */
+  documentType: RecapDocumentType;
   includeClient: boolean;
   includeContacts: boolean;
   includeMission: boolean;
@@ -9,7 +14,6 @@ export interface JobRecapExportOptions {
   includeWorkReport: boolean;
   includeScheduleHistory: boolean;
   includeComments: boolean;
-  includeSignatures: boolean;
   includePhotos: boolean;
   includeDocuments: boolean;
   /** Work report + contacts not linked to a visit */
@@ -25,6 +29,7 @@ export interface JobRecapExportOptions {
 export function defaultJobRecapExportOptions(job: JobCard): JobRecapExportOptions {
   const visits = normalizeVisitsList(job.visits ?? []);
   return {
+    documentType: 'draft',
     includeClient: true,
     includeContacts: true,
     includeMission: true,
@@ -32,7 +37,6 @@ export function defaultJobRecapExportOptions(job: JobCard): JobRecapExportOption
     includeWorkReport: true,
     includeScheduleHistory: true,
     includeComments: true,
-    includeSignatures: true,
     includePhotos: true,
     includeDocuments: true,
     includeGeneral: true,
@@ -41,6 +45,22 @@ export function defaultJobRecapExportOptions(job: JobCard): JobRecapExportOption
     documentIds: [...(job.documentIds ?? [])],
   };
 }
+
+export const RECAP_DOCUMENT_TYPE_META: Record<
+  RecapDocumentType,
+  { label: string; tag: string; description: string }
+> = {
+  draft: {
+    label: 'Information / Draft',
+    tag: 'For information only',
+    description: 'Non-binding working copy — not an official record.',
+  },
+  final: {
+    label: 'Final official version',
+    tag: 'Official document',
+    description: 'Final intervention report issued by Baladi Frères.',
+  },
+};
 
 export function visitMatchesExport(
   visitId: string | null | undefined,

@@ -42,10 +42,11 @@ async function waitForDeployment(functions, functionId, deploymentId) {
 }
 
 async function deployFunction(functions, def) {
-  const { id, name, runtime, entrypoint, execute, scopes, timeout, events } = def;
+  const { id, name, runtime, entrypoint, execute, scopes, timeout, events, schedule } = def;
   const functionDir = join(ROOT, 'functions', id.replace(/_/g, '-'));
   const archivePath = join(ROOT, '.tmp', `${id}.tar.gz`);
   const eventList = typeof events === 'function' ? events(APPWRITE.databaseId) : (events ?? []);
+  const cron = schedule ?? '';
 
   let fn;
   try {
@@ -57,7 +58,7 @@ async function deployFunction(functions, def) {
       runtime,
       execute,
       eventList,
-      '',
+      cron,
       timeout,
       true,
       true,
@@ -72,7 +73,7 @@ async function deployFunction(functions, def) {
       runtime,
       execute,
       eventList,
-      '',
+      cron,
       timeout,
       true,
       true,

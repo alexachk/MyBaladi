@@ -13,6 +13,7 @@ import {
   createJobCardInAppwrite,
   deleteJobCardFromAppwrite,
   fetchJobCardsFromAppwrite,
+  applyJobCardPermissions,
   updateJobCardInAppwrite,
 } from '../lib/appwrite/jobCards';
 import { listPersonnel } from '../lib/appwrite/adminUsers';
@@ -279,6 +280,8 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
         updates.assignees !== undefined ||
         updates.jobContacts !== undefined ||
         updates.missionTypes !== undefined ||
+        updates.missionScopes !== undefined ||
+        updates.missionNotes !== undefined ||
         updates.equipmentItems !== undefined;
       const touchesScheduleBlob =
         updates.scheduleLog !== undefined ||
@@ -292,6 +295,8 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
               assignees: before.assignees,
               jobContacts: before.jobContacts,
               missionTypes: before.missionTypes,
+              missionScopes: before.missionScopes,
+              missionNotes: before.missionNotes,
               equipmentItems: before.equipmentItems,
             }
           : before && touchesPeopleBlob && !touchesScheduleBlob
@@ -314,6 +319,13 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
         return next;
       });
       setUsingCache(false);
+
+      const ownerId = before?.technicianId;
+      const teamChanged =
+        payload.assignees !== undefined || payload.assigneeId !== undefined;
+      if (ownerId && teamChanged && after) {
+        await applyJobCardPermissions(id, ownerId, after).catch(() => undefined);
+      }
 
       if (before && after) {
         const actor = { id: sessionUser.$id, name: sessionUser.name || sessionUser.email, isAdmin };
@@ -400,7 +412,8 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
   const deleteJobCard = useCallback(
     async (id: string) => {
       requireSession();
-      await deleteJobCardFromAppwrite(id);
+      const job = jobCards.find((j) => j.id === id);
+      await deleteJobCardFromAppwrite(id, job);
       setJobCards((prev) => {
         const next = prev.filter((job) => job.id !== id);
         writeCache(next);
@@ -408,7 +421,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       });
       setUsingCache(false);
     },
-    [requireSession],
+    [requireSession, jobCards],
   );
 
   const getJobCard = useCallback(

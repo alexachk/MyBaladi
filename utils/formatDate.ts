@@ -37,12 +37,6 @@ export function formatDateTime(iso: string): string {
 
 export function todayIsoDate(): string {
   const now = new Date();
-  return now.toISOString().slice(0, 10);
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-export function generateReference(): string {
-  const now = new Date();
-  const stamp = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const suffix = Math.floor(Math.random() * 900 + 100);
-  return `JC-${stamp}-${suffix}`;
-}

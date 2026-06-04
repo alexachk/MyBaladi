@@ -1,7 +1,12 @@
 import { newContactKey } from './clientContact';
 import type { JobCard } from '../types/jobCard';
+import {
+  DEFAULT_VISIT_DURATION_MINUTES,
+  formatVisitDurationShort,
+  normalizeVisitDurationMinutes,
+} from './visitDuration';
 
-export type JobVisitStatus = 'scheduled' | 'done' | 'rescheduled' | 'cancelled';
+export type JobVisitStatus = 'scheduled' | 'in_progress' | 'done' | 'rescheduled' | 'cancelled';
 
 export interface StoredJobVisit {
   id: string;
@@ -11,6 +16,9 @@ export interface StoredJobVisit {
   status?: JobVisitStatus;
   completedAt?: string;
   rescheduledToId?: string;
+  /** Planned length of visit (15-minute steps). */
+  durationMinutes?: number;
+  /** Actual on-site times (HH:mm). */
   arrivalTime?: string;
   departureTime?: string;
   calendarEventId?: string;
@@ -22,25 +30,56 @@ export interface StoredJobVisit {
 
 export interface JobVisitEntry {
   key: string;
-  scheduledAt: Date | null;
+  visitDate: Date | null;
+  estimatedArrivalAt: Date | null;
+  estimatedDurationMinutes: number;
   label: string;
-  arrivalAt: Date | null;
-  departureAt: Date | null;
+  actualArrivalAt: Date | null;
+  actualDepartureAt: Date | null;
   useJobLocation: boolean;
   location: string;
   latitude?: number;
   longitude?: number;
 }
 
+/** Combined scheduled start for reminders / calendar / links. */
+export function visitScheduledAt(
+  entry: Pick<JobVisitEntry, 'visitDate' | 'estimatedArrivalAt'>,
+): Date | null {
+  return mergeVisitSchedule(entry.visitDate, entry.estimatedArrivalAt);
+}
+
+export function mergeVisitSchedule(visitDate: Date | null, estimatedArrivalAt: Date | null): Date | null {
+  if (!visitDate && !estimatedArrivalAt) return null;
+  const base = visitDate ? new Date(visitDate) : new Date();
+  if (estimatedArrivalAt) {
+    base.setHours(estimatedArrivalAt.getHours(), estimatedArrivalAt.getMinutes(), 0, 0);
+  } else {
+    base.setHours(9, 0, 0, 0);
+  }
+  return base;
+}
+
+function dateOnly(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12, 0, 0, 0);
+}
+
 export const JOB_VISIT_STATUS_LABELS: Record<JobVisitStatus, string> = {
   scheduled: 'Scheduled',
+  in_progress: 'On site',
   done: 'Done',
   rescheduled: 'Rescheduled',
   cancelled: 'Cancelled',
 };
 
 function parseVisitStatus(value: unknown): JobVisitStatus {
-  if (value === 'done' || value === 'rescheduled' || value === 'cancelled' || value === 'scheduled') {
+  if (
+    value === 'done' ||
+    value === 'rescheduled' ||
+    value === 'cancelled' ||
+    value === 'scheduled' ||
+    value === 'in_progress'
+  ) {
     return value;
   }
   return 'scheduled';
@@ -55,6 +94,10 @@ export function ensureVisitShape(visit: Partial<StoredJobVisit> & Pick<StoredJob
     status: visit.status ?? 'scheduled',
     completedAt: visit.completedAt,
     rescheduledToId: visit.rescheduledToId,
+    durationMinutes:
+      visit.durationMinutes != null
+        ? normalizeVisitDurationMinutes(visit.durationMinutes)
+        : undefined,
     arrivalTime: visit.arrivalTime?.trim() || undefined,
     departureTime: visit.departureTime?.trim() || undefined,
     calendarEventId: visit.calendarEventId?.trim() || undefined,
@@ -68,13 +111,36 @@ export function normalizeVisitsList(visits: StoredJobVisit[]): StoredJobVisit[] 
   return visits.map((visit) => ensureVisitShape(visit));
 }
 
+/** 1-based label for the next visit on a job card. */
+export function defaultVisitNumberLabel(visits: StoredJobVisit[]): string {
+  return `Visit ${visits.length + 1}`;
+}
+
+export function visitRowLabel(
+  visit: Pick<StoredJobVisit, 'label'>,
+  index: number,
+): string {
+  return visit.label?.trim() || `Visit ${index + 1}`;
+}
+
 export function defaultVisitEntry(at: Date | null = new Date()): JobVisitEntry {
+  const seed = at ?? new Date();
   return {
     key: newContactKey('visit'),
-    scheduledAt: at,
+    visitDate: dateOnly(seed),
+    estimatedArrivalAt: new Date(
+      seed.getFullYear(),
+      seed.getMonth(),
+      seed.getDate(),
+      seed.getHours(),
+      seed.getMinutes(),
+      0,
+      0,
+    ),
+    estimatedDurationMinutes: DEFAULT_VISIT_DURATION_MINUTES,
     label: '',
-    arrivalAt: null,
-    departureAt: null,
+    actualArrivalAt: null,
+    actualDepartureAt: null,
     useJobLocation: true,
     location: '',
   };
@@ -146,8 +212,9 @@ export function collectVisitCalendarEventIds(visits: StoredJobVisit[]): string[]
 export function normalizeVisitEntries(entries: JobVisitEntry[]): StoredJobVisit[] {
   const out: StoredJobVisit[] = [];
   for (const entry of entries) {
-    if (!entry.scheduledAt) continue;
-    const { date, time } = partsFromDate(entry.scheduledAt);
+    const scheduledAt = visitScheduledAt(entry);
+    if (!scheduledAt) continue;
+    const { date, time } = partsFromDate(scheduledAt);
     const label = entry.label.trim();
     const customLocation = !entry.useJobLocation && entry.location.trim();
     out.push(
@@ -157,8 +224,9 @@ export function normalizeVisitEntries(entries: JobVisitEntry[]): StoredJobVisit[
         time,
         label: label || undefined,
         status: 'scheduled',
-        arrivalTime: entry.arrivalAt ? timePartsFromDate(entry.arrivalAt) : undefined,
-        departureTime: entry.departureAt ? timePartsFromDate(entry.departureAt) : undefined,
+        durationMinutes: entry.estimatedDurationMinutes,
+        arrivalTime: entry.actualArrivalAt ? timePartsFromDate(entry.actualArrivalAt) : undefined,
+        departureTime: entry.actualDepartureAt ? timePartsFromDate(entry.actualDepartureAt) : undefined,
         location: customLocation ? entry.location.trim() : undefined,
         latitude: customLocation && typeof entry.latitude === 'number' ? entry.latitude : undefined,
         longitude: customLocation && typeof entry.longitude === 'number' ? entry.longitude : undefined,
@@ -190,6 +258,8 @@ export function parseStoredVisits(
           typeof row.rescheduledToId === 'string' && row.rescheduledToId.trim()
             ? row.rescheduledToId.trim()
             : undefined;
+        const durationMinutes =
+          typeof row.durationMinutes === 'number' ? row.durationMinutes : undefined;
         const arrivalTime =
           typeof row.arrivalTime === 'string' && row.arrivalTime.trim() ? row.arrivalTime.trim() : undefined;
         const departureTime =
@@ -210,6 +280,7 @@ export function parseStoredVisits(
           status,
           completedAt,
           rescheduledToId,
+          durationMinutes,
           arrivalTime,
           departureTime,
           calendarEventId,
@@ -244,17 +315,32 @@ export function visitsForForm(
     ? normalizeVisitsList(stored)
     : parseStoredVisits(null, legacyDate, legacyTime ?? null);
   if (!visits.length) return [defaultVisitEntry(new Date())];
-  return visits.map((visit, index) => ({
-    key: visit.id,
-    scheduledAt: visitToDate(visit),
-    label: visit.label ?? (visits.length > 1 ? `Visit ${index + 1}` : ''),
-    arrivalAt: timeOnVisitDate(visit.date, visit.arrivalTime),
-    departureAt: timeOnVisitDate(visit.date, visit.departureTime),
-    useJobLocation: !visit.location?.trim(),
-    location: visit.location?.trim() ?? '',
-    latitude: visit.latitude,
-    longitude: visit.longitude,
-  }));
+  return visits.map((visit, index) => {
+    const scheduled = visitToDate(visit);
+    return {
+      key: visit.id,
+      visitDate: scheduled ? dateOnly(scheduled) : null,
+      estimatedArrivalAt: scheduled
+        ? new Date(
+            scheduled.getFullYear(),
+            scheduled.getMonth(),
+            scheduled.getDate(),
+            scheduled.getHours(),
+            scheduled.getMinutes(),
+            0,
+            0,
+          )
+        : timeOnVisitDate(visit.date, visit.time),
+      estimatedDurationMinutes: normalizeVisitDurationMinutes(visit.durationMinutes),
+      label: visit.label ?? (visits.length > 1 ? `Visit ${index + 1}` : ''),
+      actualArrivalAt: timeOnVisitDate(visit.date, visit.arrivalTime),
+      actualDepartureAt: timeOnVisitDate(visit.date, visit.departureTime),
+      useJobLocation: !visit.location?.trim(),
+      location: visit.location?.trim() ?? '',
+      latitude: visit.latitude,
+      longitude: visit.longitude,
+    };
+  });
 }
 
 export function primaryVisitFields(visits: StoredJobVisit[]): {
@@ -340,7 +426,9 @@ export function sortVisitsTimeline(visits: StoredJobVisit[]): StoredJobVisit[] {
   return [...normalizeVisitsList(visits)].sort(compareStoredVisits);
 }
 
-export function formatVisitWhen(visit: Pick<StoredJobVisit, 'date' | 'time'>): string {
+export function formatVisitWhen(
+  visit: Pick<StoredJobVisit, 'date' | 'time' | 'durationMinutes'>,
+): string {
   if (!visit.date) return '—';
   const [y, m, d] = visit.date.split('-').map(Number);
   const date = new Date(y, m - 1, d);
@@ -350,7 +438,23 @@ export function formatVisitWhen(visit: Pick<StoredJobVisit, 'date' | 'time'>): s
     month: 'short',
     year: 'numeric',
   });
-  return visit.time ? `${label} · ${visit.time}` : label;
+  const timePart = visit.time ? ` · ${visit.time}` : '';
+  const durationPart =
+    visit.durationMinutes != null
+      ? ` · ${formatVisitDurationShort(visit.durationMinutes)}`
+      : '';
+  return `${label}${timePart}${durationPart}`;
+}
+
+export function formatVisitEstimatedWindow(
+  visit: Pick<StoredJobVisit, 'date' | 'time' | 'durationMinutes'>,
+): string {
+  const when = formatVisitWhen(visit);
+  if (!visit.time || visit.durationMinutes == null) return when;
+  const [hh, mm] = visit.time.split(':').map(Number);
+  const end = new Date(2000, 0, 1, hh, mm + visit.durationMinutes);
+  const endTime = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`;
+  return `${when} → ${endTime}`;
 }
 
 export function formatVisitLine(visit: StoredJobVisit, allVisits: StoredJobVisit[]): string {
@@ -399,8 +503,21 @@ export function patchVisitInList(
   );
 }
 
+export function visitInProgress(visits: StoredJobVisit[]): StoredJobVisit | null {
+  return (
+    visits.find(
+      (visit) =>
+        visitStatus(visit) === 'in_progress' || (visit.arrivalTime && !visit.departureTime),
+    ) ?? null
+  );
+}
+
+export function visitsEligibleForLaunch(visits: StoredJobVisit[]): StoredJobVisit[] {
+  return visits.filter((visit) => visitStatus(visit) === 'scheduled');
+}
+
 export function activeOnSiteVisit(visits: StoredJobVisit[]): StoredJobVisit | null {
-  const open = visits.find((visit) => visit.arrivalTime && !visit.departureTime);
+  const open = visitInProgress(visits);
   if (open) return open;
   return nextScheduledVisit(visits);
 }

@@ -1,13 +1,17 @@
 import type { ClientType } from './client';
 import type { StoredJobAssignee } from '../lib/jobAssignees';
+import type { StoredMissionScope } from '../lib/jobMissionScopes';
+import type { StoredVisitNote } from '../lib/jobVisitNotes';
 import type { StoredJobContact } from '../lib/jobContacts';
 import type { ScheduleLogEntry } from '../lib/jobSchedule';
 import type { StoredJobVisit } from '../lib/jobVisits';
 import type { StoredWorkReport } from '../lib/jobWorkReports';
 
-export type JobStatus = 'draft' | 'in_progress' | 'completed' | 'pending_review';
+export type JobStatus = 'draft' | 'planned' | 'in_progress' | 'completed' | 'pending_review';
 
 export type JobPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export type JobReviewStatus = 'none' | 'submitted' | 'approved' | 'rejected';
 
 export interface JobCard {
   id: string;
@@ -18,6 +22,8 @@ export interface JobCard {
   contactPhone: string;
   missionType: string;
   missionTypes?: string[];
+  missionScopes?: StoredMissionScope[];
+  missionNotes?: StoredVisitNote[];
   equipment: string;
   equipmentItems?: string[];
   technicianName: string;
@@ -60,15 +66,32 @@ export interface JobCard {
   notificationId?: string | null;
   calendarEventId?: string | null;
 
+  reviewStatus?: JobReviewStatus;
+  submittedById?: string | null;
+  submittedAt?: string | null;
+  reviewedById?: string | null;
+  reviewedByName?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+  reviewBypassed?: boolean;
+
   photoIds?: string[];
   documentIds?: string[];
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   draft: 'Draft',
+  planned: 'Planned',
   in_progress: 'In Progress',
   completed: 'Completed',
   pending_review: 'Pending Review',
+};
+
+export const JOB_REVIEW_STATUS_LABELS: Record<JobReviewStatus, string> = {
+  none: 'Not submitted',
+  submitted: 'Awaiting review',
+  approved: 'Approved',
+  rejected: 'Changes requested',
 };
 
 export const JOB_PRIORITY_LABELS: Record<JobPriority, string> = {

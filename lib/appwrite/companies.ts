@@ -17,6 +17,7 @@ import {
 } from '../clientWebsites';
 import { appwriteConfig, isAppwriteDatabaseConfigured } from './config';
 import { getDatabases } from './client';
+import { deleteClientDocument } from './deleteClientDocument';
 import type { Company } from '../../types/client';
 
 const COLLECTION_ID = 'companies';
@@ -145,9 +146,5 @@ export async function updateCompany(id: string, updates: Partial<CompanyInput>):
 }
 
 export async function deleteCompany(id: string): Promise<void> {
-  await getDatabases().deleteDocument({
-    databaseId: appwriteConfig.databaseId,
-    collectionId: COLLECTION_ID,
-    documentId: id,
-  });
+  await deleteClientDocument(COLLECTION_ID, id);
 }

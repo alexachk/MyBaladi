@@ -1,31 +1,40 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Animated,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { PrimaryButton } from './PrimaryButton';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import {
   defaultJobRecapExportOptions,
+  RECAP_DOCUMENT_TYPE_META,
   type JobRecapExportOptions,
+  type RecapDocumentType,
 } from '../lib/jobRecapExport';
 import { formatVisitWhen, normalizeVisitsList, sortVisitsTimeline } from '../lib/jobVisits';
 import type { JobCard } from '../types/jobCard';
 
+export type RecapDeliveryMode = 'preview' | 'email' | 'share' | 'save';
+
 interface JobRecapExportSheetProps {
   visible: boolean;
   job: JobCard | null;
-  exporting?: boolean;
+  /** The action currently running, if any */
+  busyMode?: RecapDeliveryMode | null;
+  defaultRecipients?: string[];
   onClose: () => void;
-  onExport: (options: JobRecapExportOptions) => void;
+  onDeliver: (mode: RecapDeliveryMode, options: JobRecapExportOptions, recipients: string[]) => void;
 }
 
 function SectionToggle({
@@ -53,6 +62,43 @@ function SectionToggle({
         <Text style={styles.toggleLabel}>{label}</Text>
         {hint ? <Text style={styles.toggleHint}>{hint}</Text> : null}
       </View>
+    </Pressable>
+  );
+}
+
+function RecapActionIcon({
+  icon,
+  accessibilityLabel,
+  onPress,
+  disabled,
+  busy,
+  accent,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  accessibilityLabel: string;
+  onPress: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  accent?: 'primary' | 'default';
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      style={({ pressed }) => [
+        styles.actionIconBtn,
+        accent === 'primary' && styles.actionIconBtnPrimary,
+        (disabled || busy) && styles.actionIconBtnDisabled,
+        pressed && !disabled && styles.pressed,
+      ]}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={accent === 'primary' ? colors.black : colors.grey600} />
+      ) : (
+        <Ionicons name={icon} size={22} color={colors.black} />
+      )}
     </Pressable>
   );
 }
@@ -120,18 +166,120 @@ function ChipSelect({
 export function JobRecapExportSheet({
   visible,
   job,
-  exporting = false,
+  busyMode = null,
+  defaultRecipients = [],
   onClose,
-  onExport,
+  onDeliver,
 }: JobRecapExportSheetProps) {
   const insets = useSafeAreaInsets();
+  const slideY = useRef(new Animated.Value(480)).current;
+  const scrollY = useRef(0);
+  const closing = useRef(false);
   const [options, setOptions] = useState<JobRecapExportOptions | null>(null);
+  const [recipients, setRecipients] = useState('');
+
+  const handleClose = useCallback(() => {
+    if (closing.current) return;
+    closing.current = true;
+    Animated.timing(slideY, {
+      toValue: 480,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      closing.current = false;
+      if (finished) onClose();
+    });
+  }, [onClose, slideY]);
+
+  useEffect(() => {
+    if (!visible) return;
+    closing.current = false;
+    scrollY.current = 0;
+    slideY.setValue(480);
+    Animated.spring(slideY, {
+      toValue: 0,
+      useNativeDriver: true,
+      damping: 22,
+      stiffness: 220,
+    }).start();
+  }, [visible, slideY]);
 
   useEffect(() => {
     if (visible && job) {
       setOptions(defaultJobRecapExportOptions(job));
+      setRecipients(defaultRecipients.join(', '));
     }
   }, [visible, job?.id]);
+
+  const headerPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          gesture.dy > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        onPanResponderGrant: () => {
+          slideY.stopAnimation();
+        },
+        onPanResponderMove: (_, gesture) => {
+          slideY.setValue(Math.max(0, gesture.dy));
+        },
+        onPanResponderRelease: (_, gesture) => {
+          const shouldClose = gesture.dy > 80 || gesture.vy > 0.65;
+          if (shouldClose) {
+            handleClose();
+            return;
+          }
+          Animated.spring(slideY, {
+            toValue: 0,
+            useNativeDriver: true,
+            damping: 22,
+            stiffness: 220,
+          }).start();
+        },
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [handleClose, slideY],
+  );
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_, gesture) => {
+          const downward = gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+          return scrollY.current <= 0 && downward;
+        },
+        onMoveShouldSetPanResponder: (_, gesture) => {
+          const downward = gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+          return scrollY.current <= 0 && downward;
+        },
+        onPanResponderGrant: () => {
+          slideY.stopAnimation();
+        },
+        onPanResponderMove: (_, gesture) => {
+          slideY.setValue(Math.max(0, gesture.dy));
+        },
+        onPanResponderRelease: (_, gesture) => {
+          const shouldClose = gesture.dy > 100 || gesture.vy > 0.65;
+          if (shouldClose) {
+            handleClose();
+            return;
+          }
+          Animated.spring(slideY, {
+            toValue: 0,
+            useNativeDriver: true,
+            damping: 22,
+            stiffness: 220,
+          }).start();
+        },
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [handleClose, slideY],
+  );
+
+  const busy = busyMode !== null;
+  const recipientList = recipients
+    .split(/[,;\n]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   const resolvedOptions = options ?? (job ? defaultJobRecapExportOptions(job) : null);
 
@@ -174,25 +322,73 @@ export function JobRecapExportSheet({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <KeyboardAvoidingView
         style={styles.overlay}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-          <View style={styles.handle} />
-          <View style={styles.header}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Export PDF recap</Text>
-              <Text style={styles.subtitle}>{job.reference} · choose sections & visits</Text>
+        <Pressable style={styles.backdrop} onPress={handleClose} />
+        <Animated.View
+          {...panResponder.panHandlers}
+          style={[
+            styles.sheet,
+            {
+              paddingBottom: Math.max(insets.bottom, spacing.md),
+              transform: [{ translateY: slideY }],
+            },
+          ]}
+        >
+          <View {...headerPanResponder.panHandlers}>
+            <View style={styles.handle} />
+            <View style={styles.header}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title}>Export PDF recap</Text>
+                <Text style={styles.subtitle}>{job.reference} · choose sections & visits</Text>
+              </View>
+              <Pressable
+                onPress={handleClose}
+                hitSlop={12}
+                style={({ pressed }) => pressed && styles.pressed}
+              >
+                <Ionicons name="close" size={22} color={colors.grey600} />
+              </Pressable>
             </View>
-            <Pressable onPress={onClose} hitSlop={12} style={({ pressed }) => pressed && styles.pressed}>
-              <Ionicons name="close" size={22} color={colors.grey600} />
-            </Pressable>
           </View>
 
-          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+            scrollEventThrottle={16}
+            onScroll={(event) => {
+              scrollY.current = event.nativeEvent.contentOffset.y;
+            }}
+          >
+            <Text style={styles.groupTitle}>Document type</Text>
+            <View style={styles.segment}>
+              {(['draft', 'final'] as RecapDocumentType[]).map((type) => {
+                const active = resolvedOptions.documentType === type;
+                return (
+                  <Pressable
+                    key={type}
+                    onPress={() => patch({ documentType: type })}
+                    style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+                  >
+                    <Ionicons
+                      name={type === 'final' ? 'shield-checkmark' : 'document-text-outline'}
+                      size={16}
+                      color={active ? colors.black : colors.grey600}
+                    />
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {RECAP_DOCUMENT_TYPE_META[type].label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.recipientHint}>
+              {RECAP_DOCUMENT_TYPE_META[resolvedOptions.documentType].description}
+            </Text>
+
             <Text style={styles.groupTitle}>Sections</Text>
             <SectionToggle
               label="Client & site"
@@ -229,11 +425,6 @@ export function JobRecapExportSheet({
               label="Comments"
               value={resolvedOptions.includeComments}
               onChange={(includeComments) => patch({ includeComments })}
-            />
-            <SectionToggle
-              label="Signatures"
-              value={resolvedOptions.includeSignatures}
-              onChange={(includeSignatures) => patch({ includeSignatures })}
             />
             <SectionToggle
               label="Photos"
@@ -280,15 +471,56 @@ export function JobRecapExportSheet({
                 onChange={(documentIds) => patch({ documentIds })}
               />
             ) : null}
+
+            <Text style={styles.groupTitle}>Send by email</Text>
+            <TextInput
+              style={styles.recipientInput}
+              value={recipients}
+              onChangeText={setRecipients}
+              placeholder="client@email.com, …"
+              placeholderTextColor={colors.grey400}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              autoCorrect={false}
+              multiline
+            />
+            <Text style={styles.recipientHint}>
+              Pre-fills a professional email with the PDF attached. You can edit recipients in your mail app.
+            </Text>
           </ScrollView>
 
-          <PrimaryButton
-            label={exporting ? 'Generating…' : 'Generate PDF'}
-            icon="document-text-outline"
-            onPress={() => onExport(resolvedOptions)}
-            disabled={exporting}
-          />
-        </View>
+          <View style={styles.actions}>
+            <RecapActionIcon
+              icon="eye-outline"
+              accessibilityLabel="Preview PDF"
+              onPress={() => onDeliver('preview', resolvedOptions, recipientList)}
+              disabled={busy}
+              busy={busyMode === 'preview'}
+            />
+            <RecapActionIcon
+              icon="share-outline"
+              accessibilityLabel="Share PDF"
+              onPress={() => onDeliver('share', resolvedOptions, recipientList)}
+              disabled={busy}
+              busy={busyMode === 'share'}
+            />
+            <RecapActionIcon
+              icon="save-outline"
+              accessibilityLabel="Save PDF"
+              onPress={() => onDeliver('save', resolvedOptions, recipientList)}
+              disabled={busy}
+              busy={busyMode === 'save'}
+            />
+            <RecapActionIcon
+              icon="mail-outline"
+              accessibilityLabel="Send by email"
+              onPress={() => onDeliver('email', resolvedOptions, recipientList)}
+              disabled={busy}
+              busy={busyMode === 'email'}
+              accent="primary"
+            />
+          </View>
+        </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -339,6 +571,30 @@ const styles = StyleSheet.create({
   },
   toggleLabel: { ...typography.body, color: colors.black, fontWeight: '600' },
   toggleHint: { ...typography.caption, color: colors.grey600, marginTop: 2 },
+  segment: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.grey100,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  segmentBtnActive: {
+    backgroundColor: colors.primaryLight,
+    borderColor: colors.primary,
+  },
+  segmentText: { ...typography.caption, color: colors.grey600, fontWeight: '700' },
+  segmentTextActive: { color: colors.black },
   chipBlock: { marginTop: spacing.sm, marginBottom: spacing.xs },
   chipHead: {
     flexDirection: 'row',
@@ -365,4 +621,39 @@ const styles = StyleSheet.create({
   chipText: { ...typography.caption, color: colors.grey600, fontWeight: '600' },
   chipTextSelected: { color: colors.black },
   pressed: { opacity: 0.85 },
+  disabled: { opacity: 0.5 },
+  recipientInput: {
+    ...typography.body,
+    color: colors.black,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.grey100,
+  },
+  recipientHint: { ...typography.caption, color: colors.grey600, marginTop: spacing.xs, marginBottom: spacing.sm },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  actionIconBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: radius.md,
+    backgroundColor: colors.grey100,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+  },
+  actionIconBtnPrimary: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  actionIconBtnDisabled: { opacity: 0.45 },
 });

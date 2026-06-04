@@ -1,0 +1,59 @@
+---
+description: MyBaladi project map + conventions — read before exploring, saves tokens
+alwaysApply: true
+---
+
+# MyBaladi map
+
+Expo 54 (`~54.0.33`, RN 0.81, React 19, New Arch) · expo-router · Appwrite (`fra.cloud`). Entry `expo-router/entry` (`App.tsx`/`index.ts` dead, ignore).
+
+**Skip re-exploring. Use this map. Grep/Read only the named file.**
+
+## Where things live
+- Screens: `app/` (file routes). Tabs `app/(tabs)/`. Job `app/job/`. Clients `app/clients/`. Admin `app/admin/`.
+- UI: `components/` (PascalCase). Rich inputs = `*Field.tsx`.
+- Domain logic: `lib/` (camelCase). NO `hooks/`/`services/`.
+- Appwrite CRUD: `lib/appwrite/*`. Singletons `getAccount()`/`getDatabases()` from `lib/appwrite/client.ts`.
+- State: `context/` — `JobCardsContext.tsx` (exports `useAuth` + `useJobCards`), `ClientsContext.tsx`, `NotificationsContext.tsx`.
+- Types: `types/{jobCard,client,org}.ts`. Theme: `constants/theme.ts` (`colors`,`spacing`,`radius`,`typography`,`shadow`).
+
+## Big files (target with Grep, don't full-read)
+`app/job/[id].tsx` ~1267 · `app/(tabs)/calendar.tsx` ~932 · `app/job/new.tsx` ~923 · `lib/jobRecapPdf.ts` ~793.
+
+## Hard rules
+- Appwrite schema ONLY via `scripts/appwrite/schema.mjs` + `npm run appwrite:sync`. Never Console, never ask user to. (`AGENTS.md`)
+- Expo v54 docs only: https://docs.expo.dev/versions/v54.0.0/
+- `APPWRITE_API_KEY` in `.env`, never commit.
+- Admin user ops = execute `admin_users` function (`lib/appwrite/adminUsers.ts`), not client SDK.
+- Screens use context, not raw SDK.
+
+## Data pattern (critical)
+Rich data = JSON.stringify in big string attrs, parsed via versioned helpers w/ legacy fallback:
+- `assignees` field → `lib/jobPeople.ts` (team+contacts+missions+equipment+`missionScopes`+schedule blob)
+- Mission scopes (per visit or general): types, equipment+qty, team → `lib/jobMissionScopes.ts`, UI `JobMissionScopesField` / `JobMissionScopeGroups`
+- Mission notes (multi, visit-linked): `lib/jobVisitNotes.ts` blob `missionNotes`, UI `VisitLinkedNotesField` / `JobMissionNotesGroups`
+- Work report v3 blob: work/parts/**notes** per visit (`noteItems` in `lib/jobWorkReports.ts`)
+- `workPerformed` → `lib/jobWorkReports.ts` (v3: work+parts, per-item photoIds/documentIds/visitId)
+- visits → `lib/jobVisits.ts` (`StoredJobVisit`: status, on-site times, location, calendarEventId; synced to `scheduledDate`/`scheduledTime`)
+- `contactPhones`/`contactEmails` → `lib/clientContact.ts` + `lib/clientContactStorage.ts` (v2 = emails+addresses)
+- maps open-in-app → `lib/maps.ts` (`promptMapsFor*`)
+- phone calendar → `lib/phoneCalendarSync.ts` (one event per SCHEDULED visit; rescheduled removed)
+
+When editing a context partial-update, preserve blob fields (assignees/jobContacts/missionTypes/equipmentItems) or they wipe.
+
+## Job-card pro workflow (recaps / validation / KPIs)
+- Job ACL: creator RUD + admin RUD + managers in chain (creator + assignees) get **read+update** (`lib/appwrite/jobCards.ts` `syncJobCardPermissionsInAppwrite`). Detail edit gate `lib/jobAccess.ts` `canManageJob` (participant or N+1+); team editor `JobAssigneesField` on `app/job/[id].tsx`.
+- Validation gate: job_cards fields `reviewStatus`('none'|'submitted'|'approved'|'rejected') + submittedBy/reviewedBy/reviewedAt/reviewNote/`reviewBypassed`. Logic `lib/jobReview.ts` (`canReviewJob`=admin or N+1 of tech; build{Submit,Approve,Reject,Bypass}). UI `components/JobReviewPanel.tsx`. Bypass = complete w/o supervisor, flagged.
+- Edit access: `lib/jobEditAccess.ts` — tech edits until N+1 approved or completed/signed; N+1/admin always. Closed card: tech **Reopen · add visit** (`buildReopenJobFields`) clears lock + validation, sets `in_progress`.
+- Recap log: collection `job_recaps` (PDF fileId + signature confirm + email log). CRUD `lib/appwrite/jobRecaps.ts`, types/helpers `lib/jobRecaps.ts`. Delivery orchestration `lib/jobRecapDelivery.ts` (preview/save/share/email; uploads PDF + creates recap doc). PDF: `lib/jobRecapPdf.ts` + `lib/jobRecapPdfTheme.ts` + embedded Inter `lib/jobRecapPdfFonts.ts` (`npm run recap:embed-fonts`); stamp `lib/jobRecapPdfStamp.ts`; server render `lib/appwrite/jobRecapPdfFn.ts` → `functions/job-recap-pdf` (Chromium A4, 300 DPI rasters). Email template `lib/jobRecapEmail.ts` via `expo-mail-composer` (config plugin → needs native rebuild). Sheet `components/JobRecapExportSheet.tsx` (`onDeliver(mode,opts,recipients)`), history `components/JobRecapHistory.tsx`.
+- KPIs: `lib/jobStats.ts` (`computeStats(jobs,recaps,members,filter)` + `DATE_RANGE_PRESETS`). Screen `app/stats.tsx` (scope = self+descendants via `getVisibleUserIds`; admin=all). Entry: Settings → Insights.
+- Notifications enum is FIXED on remote — sync only ADDS attrs, never updates enum elements. Reuse existing `type`s; don't add new enum values expecting sync to apply.
+
+## Conventions
+- Forms: `FormField`/`FormSection`, `PickerSheet`, `DateTimeField`. Validation scroll via `lib/formScroll.ts` anchor refs.
+- Visit-link picker uses `__general__` id for null visit.
+- PowerShell shell: chain with `;` not `&&`.
+- After edits run `npx tsc --noEmit`. Pre-existing baseline = 0 errors (keep it).
+
+## Verify cmds
+`npx tsc --noEmit` · `npm run appwrite:status` · OTA: `npx eas update --channel preview --message "..."`.

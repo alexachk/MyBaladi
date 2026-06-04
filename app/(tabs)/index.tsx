@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -21,6 +21,13 @@ import { homeConnectionLabel } from '../../constants/connection';
 import { colors, layout, radius, spacing, typography } from '../../constants/theme';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { useNotifications } from '../../context/NotificationsContext';
+import {
+  currentWeekIsoRange,
+  formatWeekRangeLabel,
+  homeMissionsPastWeek,
+  homeMissionsThisWeek,
+  previousWeekIsoRange,
+} from '../../lib/jobHome';
 import { todayIsoDate } from '../../utils/formatDate';
 
 export default function HomeScreen() {
@@ -38,7 +45,18 @@ export default function HomeScreen() {
     (job) => job.status === 'completed' && job.scheduledDate === today,
   ).length;
   const draftCount = jobCards.filter((job) => job.status === 'draft').length;
-  const recentJobs = jobCards.slice(0, 3);
+  const weekRange = useMemo(() => currentWeekIsoRange(), [today]);
+  const pastWeekRange = useMemo(() => previousWeekIsoRange(), [today]);
+  const weekJobs = useMemo(
+    () => homeMissionsThisWeek(jobCards, weekRange),
+    [jobCards, weekRange],
+  );
+  const pastWeekJobs = useMemo(
+    () => homeMissionsPastWeek(jobCards, pastWeekRange),
+    [jobCards, pastWeekRange],
+  );
+  const weekLabel = formatWeekRangeLabel(weekRange.start, weekRange.end);
+  const pastWeekLabel = formatWeekRangeLabel(pastWeekRange.start, pastWeekRange.end);
 
   const greeting = getGreeting();
   const displayName = user?.name?.split(' ')[0] ?? 'there';
@@ -148,9 +166,22 @@ export default function HomeScreen() {
               />
             </View>
 
+            {jobCards.length === 0 ? (
+              <View style={styles.empty}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="clipboard-outline" size={28} color={colors.primary} />
+                </View>
+                <Text style={styles.emptyTitle}>No job cards yet</Text>
+                <Text style={styles.emptyText}>Create a new mission from the Job Cards tab.</Text>
+              </View>
+            ) : null}
+
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent missions</Text>
-              {jobCards.length > 0 ? (
+              <View style={styles.sectionTitleWrap}>
+                <Text style={styles.sectionTitle}>Missions this week</Text>
+                <Text style={styles.sectionHint}>{weekLabel}</Text>
+              </View>
+              {weekJobs.length > 0 ? (
                 <Pressable
                   onPress={() => router.push('/(tabs)/jobs')}
                   hitSlop={8}
@@ -162,20 +193,45 @@ export default function HomeScreen() {
               ) : null}
             </View>
 
-            {recentJobs.length === 0 ? (
-              <View style={styles.empty}>
-                <View style={styles.emptyIcon}>
-                  <Ionicons name="clipboard-outline" size={28} color={colors.primary} />
-                </View>
-                <Text style={styles.emptyTitle}>No job cards yet</Text>
-                <Text style={styles.emptyText}>
-                  Create a new mission from the Job Cards tab.
-                </Text>
+            {weekJobs.length === 0 ? (
+              <View style={styles.emptyCompact}>
+                <Text style={styles.emptyText}>No visits scheduled this week.</Text>
               </View>
             ) : (
-              recentJobs.map((job) => (
+              weekJobs.map((job) => (
                 <JobCardItem
-                  key={job.id}
+                  key={`week-${job.id}`}
+                  job={job}
+                  onPress={() => router.push(`/job/${job.id}`)}
+                />
+              ))
+            )}
+
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleWrap}>
+                <Text style={styles.sectionTitle}>Past week</Text>
+                <Text style={styles.sectionHint}>{pastWeekLabel}</Text>
+              </View>
+              {pastWeekJobs.length > 0 ? (
+                <Pressable
+                  onPress={() => router.push('/(tabs)/jobs')}
+                  hitSlop={8}
+                  style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]}
+                >
+                  <Text style={styles.linkText}>View all</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.black} />
+                </Pressable>
+              ) : null}
+            </View>
+
+            {pastWeekJobs.length === 0 ? (
+              <View style={styles.emptyCompact}>
+                <Text style={styles.emptyText}>No visits scheduled last week.</Text>
+              </View>
+            ) : (
+              pastWeekJobs.map((job) => (
+                <JobCardItem
+                  key={`past-${job.id}`}
                   job={job}
                   onPress={() => router.push(`/job/${job.id}`)}
                 />
@@ -308,9 +364,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  sectionTitleWrap: {
+    flex: 1,
+    gap: 2,
+    marginRight: spacing.sm,
+  },
   sectionTitle: {
     ...typography.heading,
     color: colors.black,
+  },
+  sectionHint: {
+    ...typography.caption,
+    color: colors.grey600,
+  },
+  emptyCompact: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.grey200,
   },
   linkBtn: {
     flexDirection: 'row',

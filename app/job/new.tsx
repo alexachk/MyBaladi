@@ -16,13 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ContactAddressesField } from '../../components/ContactAddressesField';
 import { DateTimeField } from '../../components/DateTimeField';
 import { FormField, FormSection } from '../../components/FormField';
-import { JobEquipmentField } from '../../components/JobEquipmentField';
 import { JobAttachments } from '../../components/JobAttachments';
-import { JobAssigneesField } from '../../components/JobAssigneesField';
 import { JobContactsField } from '../../components/JobContactsField';
+import { JobMissionScopesField } from '../../components/JobMissionScopesField';
+import { VisitLinkedNotesField } from '../../components/VisitLinkedNotesField';
 import { JobWorkReportsField } from '../../components/JobWorkReportsField';
 import { JobVisitsField } from '../../components/JobVisitsField';
-import { MissionTypesField } from '../../components/MissionTypesField';
 import { PickerSheet, type PickerOption } from '../../components/PickerSheet';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { StackPageHeader } from '../../components/StackPageHeader';
@@ -31,18 +30,13 @@ import { colors, radius, spacing, typography } from '../../constants/theme';
 import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import { listPersonnel, type Personnel } from '../../lib/appwrite/adminUsers';
+import { formatEquipmentDisplay, formatEquipmentLine } from '../../lib/jobEquipment';
 import {
-  equipmentForForm,
-  formatEquipmentDisplay,
-  normalizeEquipmentEntries,
-  type EquipmentEntry,
-} from '../../lib/jobEquipment';
-import {
-  addressEntriesForForm,
   defaultAddressEntry,
   prepareClientAddressesPayload,
   type AddressEntry,
 } from '../../lib/clientAddresses';
+import { clientAddressesForForm } from '../../lib/jobClientSite';
 import {
   defaultEmailEntry,
   defaultPhoneEntry,
@@ -53,13 +47,7 @@ import {
   syncSingleJobToPhoneCalendar,
 } from '../../lib/phoneCalendarSync';
 import { jobFormErrorScrollKeys, useFormScrollToError, type JobFormFieldErrors } from '../../lib/formScroll';
-import {
-  assigneesForForm,
-  defaultAssigneeEntry,
-  normalizeAssigneeEntries,
-  primaryAssigneeFromEntries,
-  type AssigneeEntry,
-} from '../../lib/jobAssignees';
+import { defaultAssigneeEntry, primaryAssigneeFromEntries } from '../../lib/jobAssignees';
 import {
   defaultJobContactEntry,
   jobContactFromPerson,
@@ -70,22 +58,31 @@ import {
   splitJobContactName,
   type JobContactEntry,
 } from '../../lib/jobContacts';
+import { formatMissionTypesDisplay } from '../../lib/jobMissions';
 import {
-  formatMissionTypesDisplay,
-  missionTypesForForm,
-  normalizeMissionTypes,
-} from '../../lib/jobMissions';
+  defaultMissionScopeEntry,
+  legacyFieldsFromMissionScopes,
+  missionScopesForForm,
+  normalizeMissionScopeEntries,
+  type MissionScopeEntry,
+} from '../../lib/jobMissionScopes';
 import {
   normalizeVisitEntries,
   primaryVisitFields,
   syncJobOnSiteFields,
   visitToDate,
   visitsForForm,
+  visitScheduledAt,
   type JobVisitEntry,
 } from '../../lib/jobVisits';
+import { formatVisitDurationShort } from '../../lib/visitDuration';
+import { buildVisitLinkOptionsFromFormEntries } from '../../lib/jobVisitLink';
 import {
-  buildVisitLinkOptionsFromFormEntries,
-} from '../../lib/jobVisitLink';
+  missionNotesFromJob,
+  normalizeVisitNoteEntries,
+  visitNotesForForm,
+  type VisitNoteEntry,
+} from '../../lib/jobVisitNotes';
 import {
   normalizeWorkReportForm,
   serializeWorkReportsToStorage,
@@ -101,7 +98,8 @@ import {
   type JobStatus,
 } from '../../types/jobCard';
 import type { ClientType } from '../../types/client';
-import { formatDateTime, generateReference, todayIsoDate } from '../../utils/formatDate';
+import { nextJobReference } from '../../lib/jobReference';
+import { formatDateTime, todayIsoDate } from '../../utils/formatDate';
 
 const REMINDER_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0, label: 'At start' },
@@ -113,16 +111,8 @@ const REMINDER_OPTIONS: Array<{ value: number; label: string }> = [
 
 const PRIORITIES = Object.keys(JOB_PRIORITY_LABELS) as JobPriority[];
 
-function clientAddressesForForm(
-  client: { address?: string; contactAddresses?: Parameters<typeof addressEntriesForForm>[0] } | undefined,
-  fallback?: string,
-): AddressEntry[] {
-  if (!client) return addressEntriesForForm(undefined, fallback);
-  return addressEntriesForForm(client.contactAddresses, client.address ?? fallback);
-}
-
 export default function NewJobCardScreen() {
-  const { addJobCard, getJobCard, updateJobCard } = useJobCards();
+  const { addJobCard, getJobCard, updateJobCard, jobCards } = useJobCards();
   const { user } = useAuth();
   const { findPerson, findCompany, persons, companies } = useClients();
 
@@ -138,7 +128,7 @@ export default function NewJobCardScreen() {
   const initialPerson = params.personId ? findPerson(params.personId) : undefined;
   const initialCompany = params.companyId ? findCompany(params.companyId) : undefined;
 
-  const [reference] = useState(generateReference);
+  const reference = useMemo(() => nextJobReference(jobCards), [jobCards]);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<JobFormFieldErrors>({});
   const pendingScrollKeys = useRef<string[]>([]);
@@ -176,22 +166,19 @@ export default function NewJobCardScreen() {
     });
   });
 
-  const [assignees, setAssignees] = useState<AssigneeEntry[]>(() => {
-    if (parentJob?.assignees?.length) return assigneesForForm(parentJob.assignees);
-    if (parentJob?.assigneeId) {
-      return assigneesForForm(undefined, parentJob.assigneeId, parentJob.assigneeName ?? '');
+  const [missionScopes, setMissionScopes] = useState<MissionScopeEntry[]>(() => {
+    if (parentJob) return missionScopesForForm(parentJob);
+    const scope = defaultMissionScopeEntry(null);
+    if (user?.$id) {
+      scope.team = [defaultAssigneeEntry(user.$id, user.name ?? '', 'Lead')];
     }
-    if (user?.$id) return [defaultAssigneeEntry(user.$id, user.name ?? '', 'Lead')];
-    return [defaultAssigneeEntry()];
+    return [scope];
   });
-
-  const [missionTypes, setMissionTypes] = useState<string[]>(() =>
-    parentJob?.missionTypes?.length
-      ? [...parentJob.missionTypes]
-      : missionTypesForForm(parentJob?.missionType),
-  );
-  const [equipmentEntries, setEquipmentEntries] = useState<EquipmentEntry[]>(() =>
-    equipmentForForm(parentJob?.equipmentItems, parentJob?.equipment),
+  const [missionNotes, setMissionNotes] = useState<VisitNoteEntry[]>(() =>
+    visitNotesForForm(
+      parentJob ? missionNotesFromJob(parentJob) : undefined,
+      parentJob ? undefined : null,
+    ),
   );
   const [personnel, setPersonnel] = useState<Personnel[]>([]);
   const [personnelLoading, setPersonnelLoading] = useState(false);
@@ -200,22 +187,38 @@ export default function NewJobCardScreen() {
   const [visits, setVisits] = useState<JobVisitEntry[]>(() =>
     visitsForForm(parentJob?.visits, parentJob?.scheduledDate, parentJob?.scheduledTime),
   );
-  const visitLinkOptions = useMemo(
+  const visitAssigneeUserIds = useMemo(() => {
+    const legacy = legacyFieldsFromMissionScopes(normalizeMissionScopeEntries(missionScopes));
+    const ids = new Set<string>();
+    for (const row of legacy.assignees) {
+      if (row.userId) ids.add(row.userId);
+    }
+    return [...ids];
+  }, [missionScopes]);
+
+  const missionVisitOptions = useMemo(
     () =>
       buildVisitLinkOptionsFromFormEntries(
         visits
-          .filter((entry) => entry.scheduledAt)
           .map((entry) => {
-            const { date, time } = schedulePartsFromDate(entry.scheduledAt!);
+            const scheduledAt = visitScheduledAt(entry);
+            if (!scheduledAt) return null;
+            const { date, time } = schedulePartsFromDate(scheduledAt);
+            const duration =
+              entry.estimatedDurationMinutes > 0
+                ? ` · ${formatVisitDurationShort(entry.estimatedDurationMinutes)}`
+                : '';
             return {
               key: entry.key,
               label: entry.label.trim() || undefined,
-              when: formatScheduleWhen(date, time),
+              when: `${formatScheduleWhen(date, time)}${duration}`,
             };
-          }),
+          })
+          .filter((row): row is NonNullable<typeof row> => row != null),
       ),
     [visits],
   );
+  const visitLinkOptions = missionVisitOptions;
   const workReportVisitOptions = visitLinkOptions;
   const [cardCreatedPreview] = useState(() => new Date());
   const [reminderMinutes, setReminderMinutes] = useState<number | null>(60);
@@ -407,19 +410,28 @@ export default function NewJobCardScreen() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (saveAs: 'draft' | 'planned') => {
     const finalClientName = (displayClientName || manualClientName).trim();
-    const normalizedAssignees = normalizeAssigneeEntries(assignees);
+    const normalizedScopes = normalizeMissionScopeEntries(missionScopes);
+    const normalizedMissionNotes = normalizeVisitNoteEntries(missionNotes);
+    const legacyMission = legacyFieldsFromMissionScopes(normalizedScopes);
+    const normalizedAssignees = legacyMission.assignees;
     const nextErrors: JobFormFieldErrors = {};
 
-    if (!finalClientName) {
-      nextErrors.client = 'Pick a company, contact, or enter a client name';
-    }
-    if (!normalizedAssignees.some((entry) => entry.userId)) {
-      nextErrors.assignees = 'Add at least one team member';
-    }
-    if (!normalizeMissionTypes(missionTypes).length) {
-      nextErrors.missions = 'Select at least one mission type';
+    if (saveAs === 'planned') {
+      if (!finalClientName) {
+        nextErrors.client = 'Pick a company, contact, or enter a client name';
+      }
+      if (!normalizedAssignees.some((entry) => entry.userId)) {
+        nextErrors.assignees = 'Add at least one team member';
+      }
+      if (!legacyMission.missionTypes.length) {
+        nextErrors.missions = 'Select at least one mission type';
+      }
+      if (!visits.some((entry) => visitScheduledAt(entry))) {
+        Alert.alert('Plan mission', 'Schedule at least one visit.');
+        return;
+      }
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -431,7 +443,7 @@ export default function NewJobCardScreen() {
 
     const addressPayload = prepareClientAddressesPayload(siteAddresses);
     const normalizedContacts = normalizeJobContactEntries(jobContacts);
-    const normalizedMissionTypes = normalizeMissionTypes(missionTypes);
+    const normalizedMissionTypes = legacyMission.missionTypes;
     const missionSummary = formatMissionTypesDisplay(normalizedMissionTypes);
     const primaryContact = primaryJobContactFromEntries(normalizedContacts);
     const primary = primaryAssigneeFromEntries(normalizedAssignees);
@@ -456,12 +468,13 @@ export default function NewJobCardScreen() {
           ? new Date(primaryVisitAt.getTime() - reminderMinutes * 60 * 1000)
           : null;
 
+      const resolvedReference = nextJobReference(jobCards);
       let notificationId: string | null = null;
 
       if (reminderAt && reminderAt.getTime() > Date.now()) {
         try {
           notificationId = await scheduleJobReminder({
-            jobReference: reference,
+            jobReference: resolvedReference,
             clientName: resolvedClientName,
             fireAt: reminderAt,
           });
@@ -470,10 +483,8 @@ export default function NewJobCardScreen() {
         }
       }
 
-      const normalizedEquipment = normalizeEquipmentEntries(equipmentEntries);
-
       const job = await addJobCard({
-        reference,
+        reference: resolvedReference,
         clientName: resolvedClientName,
         siteAddress: addressPayload.address,
         contactName: primaryContact.name,
@@ -481,8 +492,10 @@ export default function NewJobCardScreen() {
         jobContacts: normalizedContacts,
         missionType: missionSummary,
         missionTypes: normalizedMissionTypes,
-        equipment: formatEquipmentDisplay(normalizedEquipment),
-        equipmentItems: normalizedEquipment,
+        missionScopes: normalizedScopes,
+        missionNotes: normalizedMissionNotes,
+        equipment: formatEquipmentDisplay(legacyMission.equipmentItems),
+        equipmentItems: legacyMission.equipmentItems.map((line) => formatEquipmentLine(line)),
         technicianName: primary.name,
         assigneeId: primary.userId || null,
         assigneeName: primary.name,
@@ -502,7 +515,7 @@ export default function NewJobCardScreen() {
         workPerformed: workReportStorage.workPerformed,
         partsUsed: workReportStorage.partsUsed,
         notes: notes.trim(),
-        status,
+        status: saveAs,
         priority,
         clientType: resolvedClientType,
         personId: primaryContact.personId,
@@ -533,7 +546,7 @@ export default function NewJobCardScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
-      <StackPageHeader title={screenTitle} />
+      <StackPageHeader title={screenTitle} compactTop />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -629,45 +642,53 @@ export default function NewJobCardScreen() {
               </Pressable>
             </FormSection>
 
-            <FormSection title="Mission">
-              <MissionTypesField
-                values={missionTypes}
-                onChange={(next) => {
-                  setMissionTypes(next);
-                  if (errors.missions) setErrors((prev) => ({ ...prev, missions: undefined }));
-                }}
-                error={errors.missions}
-                anchorRef={registerField('missions')}
-              />
-              <JobEquipmentField values={equipmentEntries} onChange={setEquipmentEntries} />
-
-              <JobAssigneesField
-                values={assignees}
-                onChange={(next) => {
-                  setAssignees(next);
-                  if (errors.assignees) setErrors((prev) => ({ ...prev, assignees: undefined }));
-                }}
-                personnel={personnel}
-                personnelLoading={personnelLoading}
-                onLoadPersonnel={() => loadPersonnel()}
-                error={errors.assignees}
-                anchorRef={registerField('assignees')}
-              />
-
-              <View style={styles.createdBanner}>
-                <Ionicons name="time-outline" size={16} color={colors.grey600} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.createdLabel}>Card creation</Text>
-                  <Text style={styles.createdValue}>{formatDateTime(cardCreatedPreview.toISOString())}</Text>
-                </View>
+            <View style={styles.createdBanner}>
+              <Ionicons name="time-outline" size={16} color={colors.grey600} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.createdLabel}>Card creation</Text>
+                <Text style={styles.createdValue}>{formatDateTime(cardCreatedPreview.toISOString())}</Text>
               </View>
+            </View>
 
+            <FormSection title="Mission">
               <JobVisitsField
                 values={visits}
                 onChange={setVisits}
                 jobSiteAddress={jobSiteAddressPreview}
+                assigneeUserIds={visitAssigneeUserIds}
+                allJobs={jobCards}
               />
 
+              <JobMissionScopesField
+                values={missionScopes}
+                onChange={(next) => {
+                  setMissionScopes(next);
+                  if (errors.missions || errors.assignees) {
+                    setErrors((prev) => ({
+                      ...prev,
+                      missions: undefined,
+                      assignees: undefined,
+                    }));
+                  }
+                }}
+                visitOptions={missionVisitOptions}
+                personnel={personnel}
+                personnelLoading={personnelLoading}
+                onLoadPersonnel={() => loadPersonnel()}
+                missionsError={errors.missions}
+                assigneesError={errors.assignees}
+                anchorRef={registerField('missions')}
+                assigneesAnchorRef={registerField('assignees')}
+              />
+
+              <VisitLinkedNotesField
+                label="Mission notes"
+                values={missionNotes}
+                onChange={setMissionNotes}
+                visitOptions={missionVisitOptions}
+              />
+
+              <View style={styles.reminderSection}>
               <Text style={styles.fieldLabel}>Reminder</Text>
               <View style={styles.chipRow}>
                 {REMINDER_OPTIONS.map((opt) => {
@@ -712,6 +733,7 @@ export default function NewJobCardScreen() {
                   </Text>
                 </View>
               </Pressable>
+              </View>
             </FormSection>
 
             <FormSection title="Attachments">
@@ -763,12 +785,21 @@ export default function NewJobCardScreen() {
               </View>
             </FormSection>
 
-            <PrimaryButton
-              label={saving ? 'Saving…' : 'Save Job Card'}
-              icon="save-outline"
-              onPress={handleSave}
-              disabled={saving}
-            />
+            <View style={styles.saveRow}>
+              <PrimaryButton
+                label={saving ? 'Saving…' : 'Save draft'}
+                icon="document-outline"
+                variant="secondary"
+                onPress={() => void handleSave('draft')}
+                disabled={saving}
+              />
+              <PrimaryButton
+                label={saving ? 'Saving…' : 'Plan mission'}
+                icon="calendar-outline"
+                onPress={() => void handleSave('planned')}
+                disabled={saving}
+              />
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -852,6 +883,10 @@ const styles = StyleSheet.create({
     ...typography.label,
     color: colors.grey600,
     marginBottom: spacing.sm,
+  },
+  reminderSection: {
+    marginTop: spacing.lg,
+    gap: spacing.sm,
   },
   subLabel: {
     ...typography.caption,
@@ -976,4 +1011,5 @@ const styles = StyleSheet.create({
   },
   inlineBtnText: { ...typography.caption, color: colors.black, fontWeight: '600' },
   pressed: { opacity: 0.85 },
+  saveRow: { gap: spacing.sm, marginTop: spacing.sm },
 });
