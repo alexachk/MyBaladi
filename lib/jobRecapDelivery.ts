@@ -1,4 +1,5 @@
 import { File } from 'expo-file-system';
+import { visitSignOffData, visitsWithSignOff } from './jobSignatures';
 import * as MailComposer from 'expo-mail-composer';
 import * as Sharing from 'expo-sharing';
 import { Platform, Share } from 'react-native';
@@ -6,11 +7,11 @@ import { pickRecapEmailLaunch } from './jobRecapEmailPicker';
 import { buildRecapPdfFileName, exportJobRecapPdf } from './jobRecapPdf';
 import { defaultJobRecapExportOptions, type JobRecapExportOptions } from './jobRecapExport';
 import { buildRecapEmail } from './jobRecapEmail';
-import { summarizeRecapOptions } from './jobRecaps';
+import { resolvePdfShareUri } from './pdfPreview';
+import { summarizeRecapOptions, type JobRecap, type RecapDeliveryMode } from './jobRecaps';
 import { createJobRecap } from './appwrite/jobRecaps';
 import { uploadAttachment } from './appwrite/storage';
 import type { JobCard } from '../types/jobCard';
-import type { JobRecap, RecapDeliveryMode } from './jobRecaps';
 
 export interface RecapActor {
   id: string;
@@ -58,6 +59,9 @@ async function persistRecap(
   }
   const fileId = await uploadAttachment({ uri, name, type: 'application/pdf', size });
 
+  const signedVisit = visitsWithSignOff(job)[0];
+  const visitSignOff = signedVisit ? visitSignOffData(signedVisit, job) : null;
+
   return createJobRecap({
     jobId: job.id,
     jobReference: job.reference,
@@ -70,9 +74,9 @@ async function persistRecap(
     generatedByName: actor.name,
     optionsJson: JSON.stringify(options),
     summary: summarizeRecapOptions(options),
-    clientSignatureId: job.clientSignatureId ?? null,
-    clientSignatureName: job.clientSignatureName ?? '',
-    signedAt: job.clientSignatureId ? job.lockedAt ?? job.finishedAt ?? null : null,
+    clientSignatureId: visitSignOff?.clientSignatureId ?? job.clientSignatureId ?? null,
+    clientSignatureName: visitSignOff?.clientSignatureName ?? job.clientSignatureName ?? '',
+    signedAt: visitSignOff?.lockedAt ?? (job.clientSignatureId ? job.lockedAt ?? job.finishedAt ?? null : null),
     emailedTo: extra.emailedTo ?? '',
     emailedAt: extra.emailedAt ?? null,
     deliveryMode,
@@ -164,6 +168,63 @@ export async function emailRecap(
     body: email.body,
     isHtml: false,
     attachments: [uri],
+  });
+
+  return { status: result.status };
+}
+
+/** Share a PDF already saved in recap history. */
+export async function exportSavedRecap(
+  recap: Pick<JobRecap, 'fileId' | 'fileName' | 'summary'>,
+): Promise<void> {
+  const file = await resolvePdfShareUri(
+    { kind: 'fileId', fileId: recap.fileId },
+    recap.fileName || recap.summary || 'Recap PDF',
+  );
+  const canShare = await Sharing.isAvailableAsync();
+  if (!canShare) {
+    throw new Error('Sharing is not available on this device.');
+  }
+  await Sharing.shareAsync(file.uri, {
+    mimeType: file.mimeType,
+    UTI: 'com.adobe.pdf',
+    dialogTitle: file.name,
+  });
+}
+
+/** Email a PDF already saved in recap history. */
+export async function emailSavedRecap(
+  job: JobCard,
+  recap: Pick<JobRecap, 'fileId' | 'fileName' | 'summary'>,
+  actor: RecapActor,
+  recipients: string[],
+): Promise<EmailRecapResult> {
+  const launch = await pickRecapEmailLaunch();
+  if (!launch) {
+    return { status: MailComposer.MailComposerStatus.CANCELLED };
+  }
+
+  const file = await resolvePdfShareUri(
+    { kind: 'fileId', fileId: recap.fileId },
+    recap.fileName || recap.summary || 'Recap.pdf',
+  );
+  const email = buildRecapEmail(job, actor.name);
+
+  if (launch === 'share') {
+    return shareRecapEmail(file.uri, email.subject, email.body, recipients, job.reference || '—');
+  }
+
+  const available = await MailComposer.isAvailableAsync();
+  if (!available) {
+    throw new Error('No email account is set up on this device.');
+  }
+
+  const result = await MailComposer.composeAsync({
+    recipients: recipients.length ? recipients : undefined,
+    subject: email.subject,
+    body: email.body,
+    isHtml: false,
+    attachments: [file.uri],
   });
 
   return { status: result.status };

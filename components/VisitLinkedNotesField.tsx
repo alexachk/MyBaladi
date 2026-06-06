@@ -3,7 +3,13 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import { defaultVisitNoteEntry, type VisitNoteEntry } from '../lib/jobVisitNotes';
-import type { VisitLinkOption } from '../lib/jobVisitLink';
+import {
+  canAddVisitLinkedRow,
+  defaultUnlockedVisitId,
+  visitIdLocked,
+  visitLinkOptionsForEdit,
+  type VisitLinkOption,
+} from '../lib/jobVisitLink';
 import { PickerSheet } from './PickerSheet';
 
 interface VisitLinkedNotesFieldProps {
@@ -14,10 +20,6 @@ interface VisitLinkedNotesFieldProps {
   onChange: (values: VisitNoteEntry[]) => void;
   visitOptions: VisitLinkOption[];
   lockedVisitIds?: string[];
-}
-
-function isVisitRowLocked(visitId: string | null, lockedVisitIds: string[]): boolean {
-  return Boolean(visitId && lockedVisitIds.includes(visitId));
 }
 
 export function VisitLinkedNotesField({
@@ -48,32 +50,41 @@ export function VisitLinkedNotesField({
     onChange(next.length > 0 ? next : [defaultVisitNoteEntry()]);
   };
 
+  const canAdd = useMemo(
+    () => canAddVisitLinkedRow(options, lockedVisitIds),
+    [options, lockedVisitIds],
+  );
+
   const addRow = () => {
-    const defaultVisitId = options.find((opt) => opt.id)?.id ?? null;
-    onChange([...rows, defaultVisitNoteEntry(defaultVisitId)]);
+    onChange([...rows, defaultVisitNoteEntry(defaultUnlockedVisitId(options, lockedVisitIds))]);
   };
 
   const selectedVisitLabel = (visitId: string | null) =>
     options.find((option) => option.id === visitId)?.label ?? options[0]?.label ?? 'General';
 
-  const pickerOptions = useMemo(
-    () => options.map((opt) => ({ id: opt.id ?? '__general__', label: opt.label })),
-    [options],
-  );
+  const pickerOptions = useMemo(() => {
+    const keepVisitId = pickerIndex !== null ? rows[pickerIndex]?.visitId : null;
+    return visitLinkOptionsForEdit(options, lockedVisitIds, keepVisitId).map((opt) => ({
+      id: opt.id ?? '__general__',
+      label: opt.label,
+    }));
+  }, [options, lockedVisitIds, pickerIndex, rows]);
 
   return (
     <View style={styles.wrap}>
       <View style={styles.labelRow}>
         <Text style={styles.label}>{label}</Text>
-        <Pressable onPress={addRow} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
-          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
-          <Text style={styles.addText}>{addLabel}</Text>
-        </Pressable>
+        {canAdd ? (
+          <Pressable onPress={addRow} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
+            <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+            <Text style={styles.addText}>{addLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.rows}>
         {rows.map((row, index) => {
-          const rowLocked = isVisitRowLocked(row.visitId, lockedVisitIds);
+          const rowLocked = visitIdLocked(row.visitId, lockedVisitIds);
           return (
           <View key={row.key} style={[styles.card, rowLocked && styles.cardLocked]}>
             {rowLocked ? (
@@ -99,8 +110,9 @@ export function VisitLinkedNotesField({
             <View pointerEvents={rowLocked ? 'none' : 'auto'} style={rowLocked ? styles.disabledBlock : undefined}>
             {options.length > 0 ? (
               <Pressable
-                onPress={() => setPickerIndex(index)}
-                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed]}
+                onPress={() => !rowLocked && setPickerIndex(index)}
+                disabled={rowLocked}
+                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed, rowLocked && styles.disabled]}
               >
                 <Ionicons name="calendar-outline" size={14} color={colors.info} />
                 <Text style={styles.visitPickerText} numberOfLines={2}>
@@ -203,4 +215,5 @@ const styles = StyleSheet.create({
   },
   multiline: { minHeight: 72 },
   pressed: { opacity: 0.85 },
+  disabled: { opacity: 0.55 },
 });

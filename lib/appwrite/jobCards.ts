@@ -11,7 +11,7 @@ import {
   missionTypesForForm,
   primaryMissionType,
 } from '../jobMissions';
-import { type StoredJobSchedule } from '../jobSchedule';
+import { reconcileVisitScheduleLog, type StoredJobSchedule } from '../jobSchedule';
 import { formatEquipmentDisplay, formatEquipmentLine, parseEquipmentFromField } from '../jobEquipment';
 import {
   legacyFieldsFromMissionScopes,
@@ -125,6 +125,7 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     ? normalizeVisitsList(people.schedule.visits)
     : parseStoredVisits(null, str(doc.scheduledDate), nullableStr(doc.scheduledTime));
   const visits = migrateLegacyOnSiteToVisits(visitsRaw, str(doc.arrivalTime), str(doc.departureTime));
+  const scheduleLog = reconcileVisitScheduleLog(visits, people.schedule?.log ?? []);
   const onSite = syncJobOnSiteFields(visits);
   const primaryVisit = primaryVisitFields(visits);
 
@@ -173,7 +174,7 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     jobContacts: people.contacts,
     initialScheduledDate: people.schedule?.initialDate || str(doc.scheduledDate) || null,
     initialScheduledTime: people.schedule?.initialTime ?? nullableStr(doc.scheduledTime),
-    scheduleLog: people.schedule?.log ?? [],
+    scheduleLog,
     visits,
     technicianId: nullableStr(doc.technicianId),
     scheduledTime: primaryVisit.scheduledTime ?? nullableStr(doc.scheduledTime),
@@ -204,6 +205,7 @@ function documentToJobCard(doc: JobCardDocBase): JobCard {
     reviewBypassed: Boolean(doc.reviewBypassed),
     photoIds: Array.isArray(doc.photoIds) ? doc.photoIds : [],
     documentIds: Array.isArray(doc.documentIds) ? doc.documentIds : [],
+    attachmentVisitLinks: people.attachmentVisitLinks ?? {},
   };
 }
 
@@ -244,7 +246,15 @@ function normalizeForWrite(
     job.missionScopes !== undefined ||
     job.missionNotes !== undefined ||
     job.visits !== undefined ||
-    job.equipmentItems !== undefined
+    job.scheduleLog !== undefined ||
+    job.initialScheduledDate !== undefined ||
+    job.initialScheduledTime !== undefined ||
+    job.scheduledDate !== undefined ||
+    job.scheduledTime !== undefined ||
+    job.equipmentItems !== undefined ||
+    job.attachmentVisitLinks !== undefined ||
+    job.photoIds !== undefined ||
+    job.documentIds !== undefined
   ) {
     const scopes =
       job.missionScopes ??
@@ -267,6 +277,7 @@ function normalizeForWrite(
         missionScopes: scopes,
         missionNotes: job.missionNotes ?? missionNotesFromJob({ missionScopes: scopes }),
         schedule: buildScheduleBlobForWrite(job),
+        attachmentVisitLinks: job.attachmentVisitLinks,
       },
       FIELD_MAX.assignees,
     );

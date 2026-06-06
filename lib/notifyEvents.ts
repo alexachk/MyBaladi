@@ -235,12 +235,19 @@ export async function notifyJobAssigned(job: JobCard, actor: Actor, assigneeId: 
   });
 }
 
-export async function notifyComment(job: JobCard, actor: Actor, body: string) {
+export async function notifyComment(
+  job: JobCard,
+  actor: Actor,
+  body: string,
+  replyTo?: { authorName: string },
+) {
   const snippet = body.length > 120 ? `${body.slice(0, 120)}…` : body;
   const payload = {
     type: 'job_commented' as const,
-    title: `New comment · ${job.reference}`,
-    body: `${actor.name}: ${snippet}`,
+    title: replyTo ? `Reply · ${job.reference}` : `New comment · ${job.reference}`,
+    body: replyTo
+      ? `${actor.name} replied to ${replyTo.authorName}: ${snippet}`
+      : `${actor.name}: ${snippet}`,
   };
 
   if (actor.isAdmin) {

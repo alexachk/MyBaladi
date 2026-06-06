@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   StyleSheet,
@@ -10,9 +12,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
-import { colors, spacing, typography } from '../constants/theme';
+import { colors, radius, spacing, typography } from '../constants/theme';
 import { buildPdfPreviewHtml } from '../lib/pdfPreviewHtml';
-import { loadPdfPreviewBase64, type PdfPreviewSource } from '../lib/pdfPreview';
+import { loadPdfPreviewBase64, resolvePdfShareUri, type PdfPreviewSource } from '../lib/pdfPreview';
 
 interface PdfPreviewModalProps {
   visible: boolean;
@@ -25,6 +27,7 @@ export function PdfPreviewModal({ visible, title, source, onClose }: PdfPreviewM
   const insets = useSafeAreaInsets();
   const [html, setHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -50,6 +53,27 @@ export function PdfPreviewModal({ visible, title, source, onClose }: PdfPreviewM
     }
   }, [visible, source, load]);
 
+  const handleExport = async () => {
+    if (!source) return;
+    setExporting(true);
+    try {
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Export', 'Sharing is not available on this device.');
+        return;
+      }
+      const file = await resolvePdfShareUri(source, title);
+      await Sharing.shareAsync(file.uri, {
+        mimeType: file.mimeType,
+        dialogTitle: file.name,
+      });
+    } catch (e) {
+      Alert.alert('Export', e instanceof Error ? e.message : 'Could not export PDF.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const onWebMessage = (event: WebViewMessageEvent) => {
     try {
       const data = JSON.parse(event.nativeEvent.data) as { type?: string; message?: string };
@@ -59,17 +83,39 @@ export function PdfPreviewModal({ visible, title, source, onClose }: PdfPreviewM
     }
   };
 
+  const canExport = Boolean(source) && !loading && !error;
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={[styles.root, { paddingTop: insets.top }]}>
         <View style={styles.bar}>
-          <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
+          <Pressable onPress={onClose} hitSlop={12} style={styles.barSide}>
             <Ionicons name="close" size={26} color={colors.black} />
           </Pressable>
           <Text style={styles.title} numberOfLines={1}>
             {title}
           </Text>
-          <View style={styles.closeBtn} />
+          <Pressable
+            onPress={() => void handleExport()}
+            disabled={!canExport || exporting}
+            hitSlop={12}
+            style={({ pressed }) => [
+              styles.barSide,
+              styles.exportBtn,
+              pressed && canExport && styles.pressed,
+              (!canExport || exporting) && styles.exportBtnDisabled,
+            ]}
+            accessibilityLabel="Export PDF"
+          >
+            {exporting ? (
+              <ActivityIndicator size="small" color={colors.black} />
+            ) : (
+              <>
+                <Ionicons name="share-outline" size={20} color={colors.black} />
+                <Text style={styles.exportLabel}>Export</Text>
+              </>
+            )}
+          </Pressable>
         </View>
 
         {loading ? (
@@ -117,8 +163,21 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.grey200,
     width: '100%',
   },
-  closeBtn: { width: 40, alignItems: 'flex-start' },
+  barSide: { width: 88, alignItems: 'flex-start' },
   title: { ...typography.subheading, flex: 1, textAlign: 'center', color: colors.black },
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+  },
+  exportBtnDisabled: { opacity: 0.45 },
+  exportLabel: { ...typography.caption, color: colors.black, fontWeight: '700' },
+  pressed: { opacity: 0.88 },
   web: { flex: 1, backgroundColor: '#525659' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md, padding: spacing.xl },
   hint: { ...typography.body, color: colors.grey400 },

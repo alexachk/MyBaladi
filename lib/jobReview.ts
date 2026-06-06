@@ -1,6 +1,12 @@
 import type { JobCard } from '../types/jobCard';
 import type { OrgMember } from '../types/org';
 import { formatDateTime } from '../utils/formatDate';
+import {
+  formatSignOffVisitLabel,
+  visitSignOffData,
+  visitsWithSignOff,
+} from './jobSignatures';
+import { normalizeVisitsList } from './jobVisits';
 import { getDescendantIds } from './orgHierarchy';
 import type { RecapDocumentType } from './jobRecapExport';
 
@@ -38,9 +44,8 @@ export function canReviewJob(
 
 /** Whether the current user may submit the job for supervisor review. */
 export function canSubmitForReview(
-  job: Pick<JobCard, 'status' | 'reviewStatus' | 'lockedAt'>,
+  job: Pick<JobCard, 'status' | 'reviewStatus'>,
 ): boolean {
-  if (job.lockedAt) return false;
   if (job.status === 'completed' || job.status === 'draft') return false;
   return job.reviewStatus !== 'submitted';
 }
@@ -159,6 +164,10 @@ export function buildRecapValidationDetails(
     | 'reviewNote'
     | 'lockedAt'
     | 'clientSignatureName'
+    | 'visits'
+    | 'signatureVisitId'
+    | 'technicianSignatureId'
+    | 'clientSignatureId'
     | 'status'
   >,
 ): RecapValidationDetails {
@@ -211,12 +220,27 @@ export function buildRecapValidationDetails(
     rows.push({ label: 'Supervisor note', value: job.reviewNote.trim() });
   }
 
-  if (job.lockedAt) {
+  const signedVisits = visitsWithSignOff(job);
+  if (signedVisits.length) {
+    const visits = normalizeVisitsList(job.visits ?? []);
+    for (const visit of signedVisits) {
+      const data = visitSignOffData(visit, job);
+      const label = formatSignOffVisitLabel(visit, visits);
+      if (data.lockedAt) {
+        const signed =
+          data.clientSignatureName?.trim() ||
+          (data.clientSignatureId || data.technicianSignatureId ? 'Signed' : 'Locked');
+        rows.push({
+          label: `Visit · ${label}`,
+          value: `${signed} · ${formatDateTime(data.lockedAt)}`,
+        });
+      }
+    }
+  } else if (job.lockedAt) {
     rows.push({ label: 'Signed & locked', value: formatDateTime(job.lockedAt) });
-  }
-
-  if (job.clientSignatureName?.trim()) {
-    rows.push({ label: 'Client sign-off', value: job.clientSignatureName.trim() });
+    if (job.clientSignatureName?.trim()) {
+      rows.push({ label: 'Client sign-off', value: job.clientSignatureName.trim() });
+    }
   }
 
   return { statusLabel, tone, rows };
@@ -229,6 +253,10 @@ export function recapValidationSectionVisible(
     | 'reviewBypassed'
     | 'lockedAt'
     | 'clientSignatureName'
+    | 'visits'
+    | 'signatureVisitId'
+    | 'technicianSignatureId'
+    | 'clientSignatureId'
     | 'status'
     | 'submittedAt'
   >,
@@ -240,6 +268,7 @@ export function recapValidationSectionVisible(
       job.reviewBypassed ||
       job.lockedAt ||
       job.clientSignatureName ||
+      visitsWithSignOff(job).length > 0 ||
       job.submittedAt ||
       job.status === 'pending_review',
   );

@@ -103,6 +103,7 @@ export function JobReviewPanel({
               <PrimaryButton
                 label="Cancel"
                 variant="ghost"
+                fill
                 onPress={() => {
                   setRejecting(false);
                   setNote('');
@@ -112,6 +113,7 @@ export function JobReviewPanel({
               <PrimaryButton
                 label="Send back"
                 icon="arrow-undo-outline"
+                fill
                 onPress={() => {
                   onReject(note);
                   setRejecting(false);
@@ -127,12 +129,14 @@ export function JobReviewPanel({
               label="Request changes"
               icon="arrow-undo-outline"
               variant="secondary"
+              fill
               onPress={() => setRejecting(true)}
               disabled={busy}
             />
             <PrimaryButton
               label="Approve & complete"
               icon="checkmark-circle-outline"
+              fill
               onPress={onApprove}
               disabled={busy}
             />
@@ -189,7 +193,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     backgroundColor: colors.grey100,
   },
-  row: { flexDirection: 'row', gap: spacing.sm },
+  row: { flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
   bypass: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: spacing.xs },
   bypassText: { ...typography.caption, color: colors.grey600, textDecorationLine: 'underline' },
 });

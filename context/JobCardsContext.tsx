@@ -26,6 +26,7 @@ import {
 } from '../lib/orgHierarchy';
 import { notifyJobCreated, notifyJobLifecycle, notifyJobUpdated, notifyVisitScheduleEvents } from '../lib/notifyEvents';
 import { clearCredentials } from '../lib/biometric';
+import { mergeJobCardBlobFields } from '../lib/jobBlobPreserve';
 import { JobCard } from '../types/jobCard';
 import type { OrgMember } from '../types/org';
 
@@ -276,38 +277,7 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
     async (id: string, updates: Partial<JobCard>) => {
       const sessionUser = requireSession();
       const before = jobCards.find((j) => j.id === id);
-      const touchesPeopleBlob =
-        updates.assignees !== undefined ||
-        updates.jobContacts !== undefined ||
-        updates.missionTypes !== undefined ||
-        updates.missionScopes !== undefined ||
-        updates.missionNotes !== undefined ||
-        updates.equipmentItems !== undefined;
-      const touchesScheduleBlob =
-        updates.scheduleLog !== undefined ||
-        updates.initialScheduledDate !== undefined ||
-        updates.initialScheduledTime !== undefined ||
-        updates.visits !== undefined;
-      const payload =
-        before && touchesScheduleBlob && !touchesPeopleBlob
-          ? {
-              ...updates,
-              assignees: before.assignees,
-              jobContacts: before.jobContacts,
-              missionTypes: before.missionTypes,
-              missionScopes: before.missionScopes,
-              missionNotes: before.missionNotes,
-              equipmentItems: before.equipmentItems,
-            }
-          : before && touchesPeopleBlob && !touchesScheduleBlob
-            ? {
-                ...updates,
-                initialScheduledDate: before.initialScheduledDate,
-                initialScheduledTime: before.initialScheduledTime,
-                scheduleLog: before.scheduleLog,
-                visits: before.visits,
-              }
-            : updates;
+      const payload = mergeJobCardBlobFields(before, updates);
       await updateJobCardInAppwrite(id, payload);
       let after: JobCard | undefined;
       setJobCards((prev) => {
@@ -328,20 +298,29 @@ export function JobCardsProvider({ children }: { children: ReactNode }) {
       }
 
       if (before && after) {
+        const nextJob = after;
         const actor = { id: sessionUser.$id, name: sessionUser.name || sessionUser.email, isAdmin };
 
-        const startedNow = !before.startedAt && after.startedAt;
-        const finishedNow = !before.finishedAt && after.finishedAt;
-        const lockedNow = !before.lockedAt && after.lockedAt;
-        const unlockedNow = before.lockedAt && !after.lockedAt;
-        const completedNow = before.status !== 'completed' && after.status === 'completed';
+        const startedNow = !before.startedAt && nextJob.startedAt;
+        const finishedNow = !before.finishedAt && nextJob.finishedAt;
+        const lockedNow = !before.lockedAt && nextJob.lockedAt;
+        const unlockedNow = before.lockedAt && !nextJob.lockedAt;
+        const visitLockedNow = (nextJob.visits ?? []).some((visit) => {
+          const was = (before.visits ?? []).find((row) => row.id === visit.id);
+          return Boolean(visit.lockedAt) && !was?.lockedAt;
+        });
+        const visitUnlockedNow = (before.visits ?? []).some((visit) => {
+          const nowVisit = (nextJob.visits ?? []).find((row) => row.id === visit.id);
+          return Boolean(visit.lockedAt) && !nowVisit?.lockedAt;
+        });
+        const completedNow = before.status !== 'completed' && nextJob.status === 'completed';
 
-        if (lockedNow) {
-          notifyJobLifecycle(after, 'signed', actor).catch(() => undefined);
+        if (lockedNow || visitLockedNow) {
+          notifyJobLifecycle(nextJob, 'signed', actor).catch(() => undefined);
         } else if (completedNow) {
-          notifyJobLifecycle(after, 'completed', actor).catch(() => undefined);
-        } else if (unlockedNow) {
-          notifyJobLifecycle(after, 'reopened', actor).catch(() => undefined);
+          notifyJobLifecycle(nextJob, 'completed', actor).catch(() => undefined);
+        } else if (unlockedNow || visitUnlockedNow) {
+          notifyJobLifecycle(nextJob, 'reopened', actor).catch(() => undefined);
         } else if (finishedNow) {
           notifyJobLifecycle(after, 'finished', actor).catch(() => undefined);
         } else if (startedNow) {

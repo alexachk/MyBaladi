@@ -2,6 +2,7 @@ import { getRoleLevel } from '../constants/positions';
 import type { JobCard } from '../types/jobCard';
 import type { OrgMember } from '../types/org';
 import { canReviewJob } from './jobReview';
+import { isVisitLocked } from './jobSignatures';
 import { normalizeVisitsList, visitStatus, type StoredJobVisit } from './jobVisits';
 
 function jobParticipantIds(
@@ -23,9 +24,9 @@ export function isJobParticipant(
   return Boolean(userId && jobParticipantIds(job).includes(userId));
 }
 
-/** Completed or signed off — field work closed until reopen. */
-export function isJobTerminated(job: Pick<JobCard, 'status' | 'lockedAt'>): boolean {
-  return job.status === 'completed' || Boolean(job.lockedAt);
+/** Completed — field work closed until reopen (visit locks do not terminate the card). */
+export function isJobTerminated(job: Pick<JobCard, 'status'>): boolean {
+  return job.status === 'completed';
 }
 
 /** Supervisor (N+1) has approved the job card. */
@@ -92,6 +93,31 @@ export function jobNeedsReopenForFollowUp(
   return isJobTerminated(job) || isSupervisorValidated(job);
 }
 
+export function hasActiveJobVisits(job: Pick<JobCard, 'visits'>): boolean {
+  return normalizeVisitsList(job.visits ?? []).some((visit) => {
+    const status = visitStatus(visit);
+    return status === 'scheduled' || status === 'in_progress';
+  });
+}
+
+/** Launch / complete visits on a closed card when a follow-up visit is scheduled. */
+export function canOperateJobVisits(
+  job: Pick<
+    JobCard,
+    'technicianId' | 'assigneeId' | 'assignees' | 'status' | 'lockedAt' | 'reviewStatus' | 'visits'
+  >,
+  userId: string | undefined,
+  isAdmin: boolean,
+  members: OrgMember[],
+): boolean {
+  if (canEditJobContent(job, userId, isAdmin, members)) return true;
+  if (!userId || !isJobParticipant(job, userId)) return false;
+  if (!hasActiveJobVisits(job)) return false;
+  if (isAdmin) return true;
+  if (isSupervisorOfJob(job, userId, false, members)) return true;
+  return isJobTerminated(job) || isSupervisorValidated(job);
+}
+
 /** Level 2+ (Supervisor, Operations Manager) or platform admin label. */
 export function isLeadLevelUser(
   userPosition: string | undefined,
@@ -129,6 +155,7 @@ export function canEditVisitLinkedRecord(
   if (isSupervisorOfJob(job, userId, false, members)) return true;
   if (isLeadLevelUser(userPosition, false)) return true;
   if (!userId || !isJobParticipant(job, userId)) return false;
+  if (isVisitLocked(visit, job)) return false;
   if (!canTechnicianEditJobContent(job, userId)) return false;
   const status = visitStatus(visit);
   if (status === 'done' || status === 'rescheduled' || status === 'cancelled') {
@@ -149,11 +176,8 @@ export function lockedVisitIdsForUser(
   userPosition: string | undefined,
 ): Set<string> {
   const locked = new Set<string>();
-  if (!jobInFollowUpCycle(job)) return locked;
   for (const visit of normalizeVisitsList(job.visits ?? [])) {
-    if (
-      !canEditVisitLinkedRecord(visit, job, userId, isAdmin, members, userPosition)
-    ) {
+    if (!canEditVisitLinkedRecord(visit, job, userId, isAdmin, members, userPosition)) {
       locked.add(visit.id);
     }
   }
@@ -175,29 +199,43 @@ export function canEditJobClientSite(
   return jobNeedsReopenForFollowUp(job);
 }
 
-/** Clears lock / validation so the team can work a new visit. */
-export function buildReopenJobFields(
-  job: Pick<JobCard, 'status' | 'reviewStatus' | 'visits'>,
+/** Level 2+ / admin may close the job card (completed + hard lock). */
+export function canCloseJobCard(
+  job: Pick<JobCard, 'status'>,
+  userPosition: string | undefined,
+  isAdmin: boolean,
+): boolean {
+  if (job.status === 'completed') return false;
+  return isLeadLevelUser(userPosition, isAdmin);
+}
+
+export function buildCloseJobCardFields(
+  userId: string,
+  job: Pick<JobCard, 'finishedAt'>,
 ): Partial<JobCard> {
-  const patch: Partial<JobCard> = {
-    lockedAt: null,
-    lockedBy: null,
+  const now = new Date().toISOString();
+  return {
+    status: 'completed',
+    lockedAt: now,
+    lockedBy: userId,
+    finishedAt: job.finishedAt ?? now,
   };
-  const hasScheduled = job.visits?.some((visit) => (visit.status ?? 'scheduled') === 'scheduled');
+}
+
+/** Resume field work after scheduling a follow-up visit — signatures and review stay. */
+export function buildFollowUpVisitStatusFields(
+  job: Pick<JobCard, 'status'>,
+  visits: StoredJobVisit[],
+): Partial<Pick<JobCard, 'status'>> {
+  const hasActive = visits.some((visit) => {
+    const status = visitStatus(visit);
+    return status === 'scheduled' || status === 'in_progress';
+  });
+  if (!hasActive) return {};
   if (job.status === 'completed' || job.status === 'pending_review') {
-    patch.status = hasScheduled ? 'planned' : 'in_progress';
+    return { status: 'in_progress' };
   }
-  if (job.reviewStatus === 'approved' || job.reviewStatus === 'submitted') {
-    patch.reviewStatus = 'none';
-    patch.submittedById = null;
-    patch.submittedAt = null;
-    patch.reviewedById = null;
-    patch.reviewedByName = null;
-    patch.reviewedAt = null;
-    patch.reviewNote = null;
-    patch.reviewBypassed = false;
-  }
-  return patch;
+  return {};
 }
 
 /** Who may remove the job card document (Appwrite delete ACL). */
@@ -230,10 +268,10 @@ export function jobContentEditBlockReason(
     return 'You are not on the team for this job card.';
   }
   if (isSupervisorValidated(job)) {
-    return 'Supervisor has approved this card. Only your N+1 can change it, or schedule a new visit to reopen.';
+    return 'Supervisor has approved this card. Only your N+1 can change it.';
   }
   if (isJobTerminated(job)) {
-    return 'This job is finished or signed. Use “Reopen · add visit” or ask your N+1.';
+    return 'This job is finished. Use Reopen to schedule a follow-up visit.';
   }
   return 'You cannot edit this job card.';
 }

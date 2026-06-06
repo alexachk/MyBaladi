@@ -1,21 +1,32 @@
 import { Ionicons } from '@expo/vector-icons';
+import { MailComposerStatus } from 'expo-mail-composer';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
+import { emailSavedRecap, exportSavedRecap, type RecapActor } from '../lib/jobRecapDelivery';
 import { emailListToArray, type JobRecap } from '../lib/jobRecaps';
+import type { JobCard } from '../types/jobCard';
 import { formatDateTime } from '../utils/formatDate';
 import { PdfPreviewModal } from './PdfPreviewModal';
 import type { PdfPreviewSource } from '../lib/pdfPreview';
 
 interface JobRecapHistoryProps {
   recaps: JobRecap[];
+  job: JobCard;
+  actor: RecapActor;
+  defaultRecipients?: string[];
   canDelete?: boolean;
   deletingId?: string | null;
   onDelete?: (recap: JobRecap) => void;
 }
 
+type RowBusy = { recapId: string; action: 'export' | 'send' };
+
 export function JobRecapHistory({
   recaps,
+  job,
+  actor,
+  defaultRecipients = [],
   canDelete = false,
   deletingId = null,
   onDelete,
@@ -24,8 +35,11 @@ export function JobRecapHistory({
     title: string;
     source: PdfPreviewSource;
   } | null>(null);
+  const [rowBusy, setRowBusy] = useState<RowBusy | null>(null);
 
   if (!recaps.length) return null;
+
+  const isRowBusy = (recapId: string) => deletingId === recapId || rowBusy?.recapId === recapId;
 
   const confirmDelete = (recap: JobRecap) => {
     if (!onDelete) return;
@@ -39,6 +53,33 @@ export function JobRecapHistory({
     );
   };
 
+  const handleExport = async (recap: JobRecap) => {
+    setRowBusy({ recapId: recap.id, action: 'export' });
+    try {
+      await exportSavedRecap(recap);
+    } catch (error) {
+      Alert.alert('Export', error instanceof Error ? error.message : 'Could not export recap.');
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const handleSend = async (recap: JobRecap) => {
+    const saved = emailListToArray(recap.emailedTo);
+    const recipients = saved.length ? saved : defaultRecipients;
+    setRowBusy({ recapId: recap.id, action: 'send' });
+    try {
+      const { status } = await emailSavedRecap(job, recap, actor, recipients);
+      if (status === MailComposerStatus.SENT) {
+        Alert.alert('Recap sent', 'The intervention report was emailed.');
+      }
+    } catch (error) {
+      Alert.alert('Send', error instanceof Error ? error.message : 'Could not send recap.');
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
   return (
     <>
       <View style={styles.card}>
@@ -50,7 +91,10 @@ export function JobRecapHistory({
 
         {recaps.map((recap) => {
           const emails = emailListToArray(recap.emailedTo);
-          const busy = deletingId === recap.id;
+          const busy = isRowBusy(recap.id);
+          const exporting = rowBusy?.recapId === recap.id && rowBusy.action === 'export';
+          const sending = rowBusy?.recapId === recap.id && rowBusy.action === 'send';
+          const deleting = deletingId === recap.id;
           return (
             <View key={recap.id} style={styles.row}>
               <Pressable
@@ -95,21 +139,47 @@ export function JobRecapHistory({
                     })
                   }
                   disabled={busy}
-                  hitSlop={8}
+                  hitSlop={6}
                   style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
                   accessibilityLabel="View recap"
                 >
                   <Ionicons name="eye-outline" size={18} color={colors.grey400} />
                 </Pressable>
+                <Pressable
+                  onPress={() => void handleExport(recap)}
+                  disabled={busy}
+                  hitSlop={6}
+                  style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+                  accessibilityLabel="Export recap"
+                >
+                  {exporting ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Ionicons name="share-outline" size={18} color={colors.primary} />
+                  )}
+                </Pressable>
+                <Pressable
+                  onPress={() => void handleSend(recap)}
+                  disabled={busy}
+                  hitSlop={6}
+                  style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+                  accessibilityLabel="Send recap"
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Ionicons name="mail-outline" size={18} color={colors.primary} />
+                  )}
+                </Pressable>
                 {canDelete && onDelete ? (
                   <Pressable
                     onPress={() => confirmDelete(recap)}
                     disabled={busy || deletingId !== null}
-                    hitSlop={8}
+                    hitSlop={6}
                     style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
                     accessibilityLabel="Delete recap"
                   >
-                    {busy ? (
+                    {deleting ? (
                       <ActivityIndicator size="small" color={colors.error} />
                     ) : (
                       <Ionicons name="trash-outline" size={18} color={colors.error} />
@@ -166,21 +236,23 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.sm,
     paddingRight: spacing.xs,
+    minWidth: 0,
   },
-  rowText: { flex: 1 },
+  rowText: { flex: 1, minWidth: 0 },
   rowActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: 2,
     alignSelf: 'center',
     paddingVertical: spacing.sm,
+    flexShrink: 0,
   },
   actionBtn: {
-    padding: spacing.xs,
+    padding: 6,
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 32,
-    minHeight: 32,
+    minWidth: 28,
+    minHeight: 28,
   },
   pressed: { opacity: 0.7 },
   rowTitle: { ...typography.body, color: colors.black, fontWeight: '600' },

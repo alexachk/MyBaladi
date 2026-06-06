@@ -232,6 +232,9 @@ export default function NewJobCardScreen() {
   );
   const [photoIds, setPhotoIds] = useState<string[]>([]);
   const [documentIds, setDocumentIds] = useState<string[]>([]);
+  const [attachmentVisitLinks, setAttachmentVisitLinks] = useState<
+    import('../../lib/jobCardAttachments').AttachmentVisitLinks
+  >({});
   const [status, setStatus] = useState<JobStatus>('draft');
   const [priority, setPriority] = useState<JobPriority>(parentJob?.priority ?? 'normal');
 
@@ -523,6 +526,7 @@ export default function NewJobCardScreen() {
         parentJobId: parentJob?.id ?? null,
         photoIds,
         documentIds,
+        attachmentVisitLinks,
       });
 
       if (addToCalendar && user) {
@@ -741,9 +745,12 @@ export default function NewJobCardScreen() {
                 embedded
                 photoIds={photoIds}
                 documentIds={documentIds}
-                onChange={async ({ photoIds: nextPhotos, documentIds: nextDocs }) => {
+                attachmentVisitLinks={attachmentVisitLinks}
+                visitOptions={visitLinkOptions}
+                onChange={async ({ photoIds: nextPhotos, documentIds: nextDocs, attachmentVisitLinks: nextLinks }) => {
                   setPhotoIds(nextPhotos);
                   setDocumentIds(nextDocs);
+                  setAttachmentVisitLinks(nextLinks);
                 }}
               />
             </FormSection>

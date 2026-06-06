@@ -276,15 +276,24 @@ export const COLLECTIONS = [
     id: 'job_comments',
     name: 'Job Comments',
     documentSecurity: false,
-    collectionPermissions: withAppDev(['read("users")', 'create("users")', 'update("label:admin")', 'delete("label:admin")']),
+    collectionPermissions: withAppDev([
+      'read("users")',
+      'create("users")',
+      'update("users")',
+      'delete("users")',
+      'update("label:admin")',
+      'delete("label:admin")',
+    ]),
     attributes: [
       { type: 'string', key: 'jobId', size: 36, required: true },
       { type: 'string', key: 'authorId', size: 36, required: true },
       { type: 'string', key: 'authorName', size: 128, required: true },
       { type: 'string', key: 'body', size: 5000, required: true },
+      { type: 'string', key: 'parentId', size: 36 },
     ],
     indexes: [
       { key: 'jobId_idx', type: 'key', attributes: ['jobId'] },
+      { key: 'parentId_idx', type: 'key', attributes: ['parentId'] },
     ],
   },
   {

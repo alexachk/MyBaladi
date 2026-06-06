@@ -16,6 +16,8 @@ export interface StoredJobVisit {
   status?: JobVisitStatus;
   completedAt?: string;
   rescheduledToId?: string;
+  /** Prior done visit this follow-up continues (reopen without erasing history). */
+  followUpOfVisitId?: string;
   /** Planned length of visit (15-minute steps). */
   durationMinutes?: number;
   /** Actual on-site times (HH:mm). */
@@ -26,6 +28,13 @@ export interface StoredJobVisit {
   location?: string;
   latitude?: number;
   longitude?: number;
+  /** Per-visit sign-off — locks this visit only, not the whole job card. */
+  technicianSignatureId?: string;
+  clientSignatureId?: string;
+  clientSignatureName?: string;
+  technicianSignedAt?: string;
+  lockedAt?: string;
+  lockedBy?: string;
 }
 
 export interface JobVisitEntry {
@@ -94,6 +103,7 @@ export function ensureVisitShape(visit: Partial<StoredJobVisit> & Pick<StoredJob
     status: visit.status ?? 'scheduled',
     completedAt: visit.completedAt,
     rescheduledToId: visit.rescheduledToId,
+    followUpOfVisitId: visit.followUpOfVisitId?.trim() || undefined,
     durationMinutes:
       visit.durationMinutes != null
         ? normalizeVisitDurationMinutes(visit.durationMinutes)
@@ -104,6 +114,12 @@ export function ensureVisitShape(visit: Partial<StoredJobVisit> & Pick<StoredJob
     location: visit.location?.trim() || undefined,
     latitude: typeof visit.latitude === 'number' ? visit.latitude : undefined,
     longitude: typeof visit.longitude === 'number' ? visit.longitude : undefined,
+    technicianSignatureId: visit.technicianSignatureId?.trim() || undefined,
+    clientSignatureId: visit.clientSignatureId?.trim() || undefined,
+    clientSignatureName: visit.clientSignatureName?.trim() || undefined,
+    technicianSignedAt: visit.technicianSignedAt?.trim() || undefined,
+    lockedAt: visit.lockedAt?.trim() || undefined,
+    lockedBy: visit.lockedBy?.trim() || undefined,
   };
 }
 
@@ -258,6 +274,10 @@ export function parseStoredVisits(
           typeof row.rescheduledToId === 'string' && row.rescheduledToId.trim()
             ? row.rescheduledToId.trim()
             : undefined;
+        const followUpOfVisitId =
+          typeof row.followUpOfVisitId === 'string' && row.followUpOfVisitId.trim()
+            ? row.followUpOfVisitId.trim()
+            : undefined;
         const durationMinutes =
           typeof row.durationMinutes === 'number' ? row.durationMinutes : undefined;
         const arrivalTime =
@@ -272,6 +292,26 @@ export function parseStoredVisits(
           typeof row.calendarEventId === 'string' && row.calendarEventId.trim()
             ? row.calendarEventId.trim()
             : undefined;
+        const technicianSignatureId =
+          typeof row.technicianSignatureId === 'string' && row.technicianSignatureId.trim()
+            ? row.technicianSignatureId.trim()
+            : undefined;
+        const clientSignatureId =
+          typeof row.clientSignatureId === 'string' && row.clientSignatureId.trim()
+            ? row.clientSignatureId.trim()
+            : undefined;
+        const clientSignatureName =
+          typeof row.clientSignatureName === 'string' && row.clientSignatureName.trim()
+            ? row.clientSignatureName.trim()
+            : undefined;
+        const technicianSignedAt =
+          typeof row.technicianSignedAt === 'string' && row.technicianSignedAt.trim()
+            ? row.technicianSignedAt.trim()
+            : undefined;
+        const lockedAt =
+          typeof row.lockedAt === 'string' && row.lockedAt.trim() ? row.lockedAt.trim() : undefined;
+        const lockedBy =
+          typeof row.lockedBy === 'string' && row.lockedBy.trim() ? row.lockedBy.trim() : undefined;
         return ensureVisitShape({
           id,
           date,
@@ -280,6 +320,7 @@ export function parseStoredVisits(
           status,
           completedAt,
           rescheduledToId,
+          followUpOfVisitId,
           durationMinutes,
           arrivalTime,
           departureTime,
@@ -287,6 +328,12 @@ export function parseStoredVisits(
           location,
           latitude,
           longitude,
+          technicianSignatureId,
+          clientSignatureId,
+          clientSignatureName,
+          technicianSignedAt,
+          lockedAt,
+          lockedBy,
         });
       })
       .filter(Boolean) as StoredJobVisit[];
@@ -424,6 +471,20 @@ export function compareStoredVisits(a: StoredJobVisit, b: StoredJobVisit): numbe
 
 export function sortVisitsTimeline(visits: StoredJobVisit[]): StoredJobVisit[] {
   return [...normalizeVisitsList(visits)].sort(compareStoredVisits);
+}
+
+export function hasActiveFollowUpVisits(visits: StoredJobVisit[]): boolean {
+  return normalizeVisitsList(visits).some((visit) => {
+    const status = visitStatus(visit);
+    return status === 'scheduled' || status === 'in_progress';
+  });
+}
+
+export function followUpVisitFor(
+  visits: StoredJobVisit[],
+  priorVisitId: string,
+): StoredJobVisit | undefined {
+  return normalizeVisitsList(visits).find((visit) => visit.followUpOfVisitId === priorVisitId);
 }
 
 export function formatVisitWhen(

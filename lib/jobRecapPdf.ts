@@ -3,7 +3,8 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Image } from 'react-native';
 import { formatAssigneesDisplay } from './jobAssignees';
-import { listComments, type JobComment } from './appwrite/comments';
+import { isCommentEdited, listComments, type JobComment } from './appwrite/comments';
+import { buildCommentThreads, type CommentThreadNode } from './jobCommentThreads';
 import {
   downloadAttachmentAsDataUri,
   getAttachmentName,
@@ -23,7 +24,13 @@ import {
   type RecapDocumentType,
   type JobRecapExportOptions,
 } from './jobRecapExport';
-import { buildSignOffPdfBlock, buildSignOffRecapHtml } from './jobSignatures';
+import {
+  buildSignOffPdfBlockForVisit,
+  buildSignOffRecapHtml,
+  isVisitLocked,
+  visitSignOffData,
+  visitsWithSignOff,
+} from './jobSignatures';
 import { formatScheduleLogEntry, formatScheduleWhen, scheduleLogForDisplay } from './jobSchedule';
 import { formatVisitOnSiteTimes } from './jobVisitLink';
 import { formatVisitNotesList, missionNotesFromJob } from './jobVisitNotes';
@@ -93,6 +100,7 @@ export interface JobRecapAssets {
   workAttachmentDocumentNames: Record<string, string>;
   technicianSignatureDataUri: string | null;
   clientSignatureDataUri: string | null;
+  visitSignOffImages: Record<string, { tech: string | null; client: string | null }>;
 }
 
 const BALADI_LOGO = require('../assets/baladi-freres-sal.png');
@@ -437,6 +445,27 @@ export async function prepareJobRecapAssets(
 
   const sitePin = options.includeClient ? await resolveSiteMapPinForRecap(job) : null;
 
+  const signedVisits = visitsWithSignOff(job).filter((visit) =>
+    visitRowIncluded(visit.id, options),
+  );
+  const visitSignOffDownloads = await Promise.all(
+    signedVisits.map(async (visit) => {
+      const data = visitSignOffData(visit, job);
+      const [tech, client] = await Promise.all([
+        data.technicianSignatureId
+          ? downloadAttachmentAsDataUri(data.technicianSignatureId)
+          : Promise.resolve(null),
+        data.clientSignatureId
+          ? downloadAttachmentAsDataUri(data.clientSignatureId)
+          : Promise.resolve(null),
+      ]);
+      return [visit.id, { tech, client }] as const;
+    }),
+  );
+  const visitSignOffImages = Object.fromEntries(visitSignOffDownloads);
+  const primarySignOff = signedVisits[0];
+  const primaryData = primarySignOff ? visitSignOffData(primarySignOff, job) : null;
+
   const [logoDataUri, comments, siteMapMarkup, techSigUri, clientSigUri, ...documentNames] =
     await Promise.all([
       getBaladiLogoDataUri(),
@@ -444,12 +473,16 @@ export async function prepareJobRecapAssets(
       sitePin
         ? buildRecapSiteMapMarkup(sitePin.latitude, sitePin.longitude)
         : Promise.resolve(''),
-      job.technicianSignatureId
-        ? downloadAttachmentAsDataUri(job.technicianSignatureId)
-        : Promise.resolve(null),
-      job.clientSignatureId
-        ? downloadAttachmentAsDataUri(job.clientSignatureId)
-        : Promise.resolve(null),
+      primaryData?.technicianSignatureId
+        ? downloadAttachmentAsDataUri(primaryData.technicianSignatureId)
+        : job.technicianSignatureId
+          ? downloadAttachmentAsDataUri(job.technicianSignatureId)
+          : Promise.resolve(null),
+      primaryData?.clientSignatureId
+        ? downloadAttachmentAsDataUri(primaryData.clientSignatureId)
+        : job.clientSignatureId
+          ? downloadAttachmentAsDataUri(job.clientSignatureId)
+          : Promise.resolve(null),
       ...(options.includeDocuments
         ? documentIds.map((id) => getAttachmentName(id))
         : []),
@@ -501,7 +534,28 @@ export async function prepareJobRecapAssets(
     workAttachmentDocumentNames,
     technicianSignatureDataUri: techSigUri,
     clientSignatureDataUri: clientSigUri,
+    visitSignOffImages,
   };
+}
+
+function renderCommentThreadsHtml(nodes: CommentThreadNode[], depth = 0): string {
+  return nodes
+    .map((node) => {
+      const comment = node.comment;
+      const indent = depth > 0 ? ` style="margin-left:${depth * 14}px"` : '';
+      const replyTag = depth > 0 ? '<span class="comment-reply">Reply</span>' : '';
+      return `
+          <div class="comment${depth > 0 ? ' comment-reply-wrap' : ''}"${indent}>
+            <div class="comment-head">
+              <strong>${escapeHtml(comment.authorName)}</strong>
+              ${replyTag}
+              <span>${escapeHtml(formatDateTime(comment.createdAt))}${isCommentEdited(comment) ? ` · modified ${escapeHtml(formatDateTime(comment.updatedAt))}` : ''}</span>
+            </div>
+            <div class="comment-body">${nl2br(comment.body)}</div>
+          </div>
+          ${renderCommentThreadsHtml(node.replies, depth + 1)}`;
+    })
+    .join('');
 }
 
 export function buildJobRecapHtml(
@@ -575,9 +629,24 @@ export function buildJobRecapHtml(
                   ? { bg: '#F3F4F6', text: RECAP_BRAND.grey600 }
                   : { bg: '#DBEAFE', text: RECAP_BRAND.info };
             const onSite = formatVisitOnSiteTimes(visit);
-            const whenCell = onSite
-              ? `${escapeHtml(formatVisitWhen(visit))}<div class="cell-sub">${escapeHtml(onSite)}</div>`
-              : escapeHtml(formatVisitWhen(visit));
+            const signOff = visitSignOffData(visit, job);
+            const signOffNote = isVisitLocked(visit, job)
+              ? signOff.clientSignatureName?.trim()
+                ? `Signed · ${signOff.clientSignatureName.trim()}`
+                : signOff.clientSignatureId || signOff.technicianSignatureId
+                  ? 'Signed'
+                  : 'Locked'
+              : '';
+            const whenParts = [formatVisitWhen(visit)];
+            if (onSite) whenParts.push(onSite);
+            if (signOffNote) whenParts.push(signOffNote);
+            const whenCell = whenParts
+              .map((line, i) =>
+                i === 0
+                  ? escapeHtml(line)
+                  : `<div class="cell-sub">${escapeHtml(line)}</div>`,
+              )
+              .join('');
             return `
             <tr>
               <td class="col-num">${index + 1}</td>
@@ -611,18 +680,7 @@ export function buildJobRecapHtml(
     : '';
 
   const commentRows = assets.comments.length
-    ? assets.comments
-        .map(
-          (comment) => `
-          <div class="comment">
-            <div class="comment-head">
-              <strong>${escapeHtml(comment.authorName)}</strong>
-              <span>${escapeHtml(formatDateTime(comment.createdAt))}</span>
-            </div>
-            <div class="comment-body">${nl2br(comment.body)}</div>
-          </div>`,
-        )
-        .join('')
+    ? renderCommentThreadsHtml(buildCommentThreads(assets.comments))
     : '';
 
   const photoGrid = assets.photoDataUris.length
@@ -717,11 +775,23 @@ export function buildJobRecapHtml(
     ? `${workSection}${row('Additional notes', job.notes)}`
     : '';
 
-  const signOffBlock = buildSignOffPdfBlock(job, {
-    tech: assets.technicianSignatureDataUri,
-    client: assets.clientSignatureDataUri,
-  });
-  const signaturesSection = signOffBlock ? buildSignOffRecapHtml(signOffBlock) : '';
+  const signOffBlocks = visitsWithSignOff(job)
+    .filter((visit) => visitRowIncluded(visit.id, options))
+    .map((visit) =>
+      buildSignOffPdfBlockForVisit(
+        visit,
+        job,
+        assets.visitSignOffImages[visit.id] ?? {
+          tech: null,
+          client: null,
+        },
+      ),
+    )
+    .filter((block): block is NonNullable<typeof block> => Boolean(block));
+  const signaturesSection = signOffBlocks.length
+    ? signOffBlocks.map((block) => buildSignOffRecapHtml(block)).join('')
+    : '';
+  const hasLockedVisit = signOffBlocks.some((block) => Boolean(block.lockedAt));
 
   const now = new Date();
   const generatedAt = formatDateTime(now.toISOString());
@@ -1047,6 +1117,14 @@ export function buildJobRecapHtml(
       margin-bottom: 4px;
     }
     .comment-body { font-size: ${RECAP_TYPO.small}; }
+    .comment-reply {
+      font-size: 7pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: ${RECAP_BRAND.info};
+    }
+    .comment-reply-wrap { border-left: 2px solid ${RECAP_BRAND.grey200}; padding-left: 8px; }
     .photo-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -1133,7 +1211,9 @@ export function buildJobRecapHtml(
           ? ` ${validationStatusBadge(validationDetails.tone, validationDetails.statusLabel)}`
           : ''
       }${
-        job.lockedAt ? badge('Signed & locked', '#D1FAE5', RECAP_BRAND.success) : ''
+        hasLockedVisit || job.lockedAt
+          ? badge('Signed & locked', '#D1FAE5', RECAP_BRAND.success)
+          : ''
       }</div>
     </div>
 

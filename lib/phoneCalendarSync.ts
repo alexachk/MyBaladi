@@ -304,6 +304,11 @@ async function persistVisitCalendarEventIds(
   if (owner === userId) {
     await updateJobCard(job.id, {
       visits,
+      scheduleLog: job.scheduleLog,
+      initialScheduledDate: job.initialScheduledDate,
+      initialScheduledTime: job.initialScheduledTime,
+      scheduledDate: job.scheduledDate,
+      scheduledTime: job.scheduledTime,
       calendarEventId: null,
     });
   }
@@ -353,7 +358,15 @@ export async function syncSingleJobToPhoneCalendar(
       delete localEvents[job.id];
       const owner = job.assigneeId ?? job.technicianId ?? '';
       if (owner === userId) {
-        await updateJobCard(job.id, { calendarEventId: null, visits });
+        await updateJobCard(job.id, {
+          calendarEventId: null,
+          visits,
+          scheduleLog: job.scheduleLog,
+          initialScheduledDate: job.initialScheduledDate,
+          initialScheduledTime: job.initialScheduledTime,
+          scheduledDate: job.scheduledDate,
+          scheduledTime: job.scheduledTime,
+        });
       }
     }
     await saveLocalJobEvents(localEvents);

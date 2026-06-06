@@ -2,7 +2,13 @@
 import { Databases } from 'node-appwrite';
 import { createAdminClient } from './client.mjs';
 import { APPWRITE } from './config.mjs';
-import { MOCK_COMPANIES, MOCK_PERSONS } from './mockClientsData.mjs';
+import {
+  LEGACY_COMPANY_IDS,
+  LEGACY_PERSON_IDS,
+  MOCK_COMPANIES,
+  MOCK_PERSONS,
+} from './mockClientsData.mjs';
+import { purgeLegacyMocks } from './purgeMocks.mjs';
 
 const COMPANIES = 'companies';
 const PERSONS = 'persons';
@@ -85,6 +91,12 @@ async function main() {
   const databases = new Databases(createAdminClient());
 
   console.log(`Seeding sample clients → database ${APPWRITE.databaseId}\n`);
+
+  const purged = await purgeLegacyMocks(databases, APPWRITE.databaseId, {
+    companies: LEGACY_COMPANY_IDS,
+    persons: LEGACY_PERSON_IDS,
+  });
+  if (purged) console.log(`Purged ${purged} legacy demo client(s).\n`);
 
   for (const company of MOCK_COMPANIES) {
     await upsertDocument(databases, COMPANIES, company.id, companyPayload(company));

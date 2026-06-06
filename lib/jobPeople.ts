@@ -5,6 +5,11 @@ import { parseStoredJobContacts, type StoredJobContact } from './jobContacts';
 import { parseStoredSchedule, type StoredJobSchedule } from './jobSchedule';
 import { parseStoredMissionScopes, type StoredMissionScope } from './jobMissionScopes';
 import { legacyMissionNotesFromScopes, parseStoredVisitNotes, type StoredVisitNote } from './jobVisitNotes';
+import {
+  compactAttachmentVisitLinks,
+  parseAttachmentVisitLinks,
+  type AttachmentVisitLinks,
+} from './jobCardAttachments';
 import type { StoredJobVisit } from './jobVisits';
 
 export interface JobPeopleBlob {
@@ -15,6 +20,7 @@ export interface JobPeopleBlob {
   missionScopes?: StoredMissionScope[];
   missionNotes?: StoredVisitNote[];
   schedule?: StoredJobSchedule;
+  attachmentVisitLinks?: AttachmentVisitLinks;
 }
 
 const EMPTY_BLOB: JobPeopleBlob = { team: [], contacts: [], missions: [], equipment: [] };
@@ -26,7 +32,8 @@ function needsPeopleWrapper(blob: JobPeopleBlob): boolean {
     blob.equipment.length > 0 ||
     (blob.missionScopes?.length ?? 0) > 0 ||
     (blob.missionNotes?.length ?? 0) > 0 ||
-    Boolean(blob.schedule)
+    Boolean(blob.schedule) ||
+    Object.keys(blob.attachmentVisitLinks ?? {}).length > 0
   );
 }
 
@@ -73,6 +80,7 @@ export function parseJobPeopleBlob(raw: unknown): JobPeopleBlob {
         return [];
       })(),
       schedule: parseStoredSchedule(row.schedule),
+      attachmentVisitLinks: parseAttachmentVisitLinks(row.attV),
     };
   }
   return EMPTY_BLOB;
@@ -105,7 +113,14 @@ function compactVisit(visit: StoredJobVisit, stripGeo = false): StoredJobVisit {
   if (visit.departureTime) row.departureTime = visit.departureTime;
   if (visit.completedAt) row.completedAt = visit.completedAt;
   if (visit.rescheduledToId) row.rescheduledToId = visit.rescheduledToId;
+  if (visit.followUpOfVisitId) row.followUpOfVisitId = visit.followUpOfVisitId;
   if (visit.calendarEventId) row.calendarEventId = visit.calendarEventId;
+  if (visit.technicianSignatureId) row.technicianSignatureId = visit.technicianSignatureId;
+  if (visit.clientSignatureId) row.clientSignatureId = visit.clientSignatureId;
+  if (visit.clientSignatureName) row.clientSignatureName = visit.clientSignatureName.slice(0, 64);
+  if (visit.technicianSignedAt) row.technicianSignedAt = visit.technicianSignedAt;
+  if (visit.lockedAt) row.lockedAt = visit.lockedAt;
+  if (visit.lockedBy) row.lockedBy = visit.lockedBy;
   return row;
 }
 
@@ -144,6 +159,8 @@ function buildPayload(blob: JobPeopleBlob, options: { compactContacts?: boolean;
   if (blob.missionScopes?.length) payload.missionScopes = blob.missionScopes;
   if (blob.missionNotes?.length) payload.missionNotes = blob.missionNotes;
   if (schedule) payload.schedule = schedule;
+  const attV = compactAttachmentVisitLinks(blob.attachmentVisitLinks ?? {});
+  if (Object.keys(attV).length) payload.attV = attV;
   return JSON.stringify(payload);
 }
 

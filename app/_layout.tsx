@@ -83,7 +83,15 @@ function RootNavigator() {
         />
         <Stack.Screen name="job/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="stats" options={{ headerShown: false }} />
-        <Stack.Screen name="job/sign/[id]" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen
+          name="job/sign/[id]"
+          options={{
+            headerShown: false,
+            presentation: 'fullScreenModal',
+            gestureEnabled: false,
+            fullScreenGestureEnabled: false,
+          }}
+        />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen name="clients" options={{ headerShown: false }} />
         <Stack.Screen name="notifications" options={{ headerShown: false }} />

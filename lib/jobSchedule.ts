@@ -1,5 +1,6 @@
 import type { JobCard, JobStatus } from '../types/jobCard';
 import { formatDate } from '../utils/formatDate';
+import { visitLinkLabel } from './jobVisitLink';
 import {
   computeActualVisitDurationMinutes,
   formatVisitOnSiteStamp,
@@ -170,20 +171,38 @@ export function formatScheduleLogOnSiteDetail(
   );
 }
 
+export function formatScheduleLogVisitLabel(
+  entry: ScheduleLogEntry,
+  visits?: StoredJobVisit[],
+): string {
+  if (!entry.visitId || !visits?.length) return '';
+  const label = visitLinkLabel(visits, entry.visitId);
+  return label === 'Visit' || label === 'General' ? '' : label;
+}
+
 export function formatScheduleLogEntry(entry: ScheduleLogEntry, visits?: StoredJobVisit[]): string {
+  const visit = formatScheduleLogVisitLabel(entry, visits);
+  const visitPrefix = visit ? `${visit} · ` : '';
   const when = formatScheduleWhen(entry.toDate || entry.fromDate, entry.toTime ?? entry.fromTime);
   const onSite = formatScheduleLogOnSiteDetail(entry, visits);
 
   if (entry.action === 'done') {
-    return onSite ? `Visit done · ${when} · ${onSite}` : `Visit done · ${when}`;
+    return onSite
+      ? `${visitPrefix}Visit done · ${when} · ${onSite}`
+      : `${visitPrefix}Visit done · ${when}`;
   }
   if (entry.action === 'launched') {
-    return onSite ? `Visit launched · ${when} · ${onSite}` : `Visit launched · ${when}`;
+    return onSite
+      ? `${visitPrefix}Visit launched · ${when} · ${onSite}`
+      : `${visitPrefix}Visit launched · ${when}`;
   }
   if (entry.action === 'added') {
-    return `Visit added · ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
+    return `${visitPrefix}Visit added · ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
   }
-  return `${formatScheduleWhen(entry.fromDate, entry.fromTime)} → ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
+  if (entry.action === 'rescheduled') {
+    return `${visitPrefix}Rescheduled · ${formatScheduleWhen(entry.fromDate, entry.fromTime)} → ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
+  }
+  return `${visitPrefix}${formatScheduleWhen(entry.fromDate, entry.fromTime)} → ${formatScheduleWhen(entry.toDate, entry.toTime)}`;
 }
 
 export function scheduleWasRescheduled(job: Pick<
@@ -212,9 +231,76 @@ export function resolveStoredSchedule(job: Pick<
   };
 }
 
-/** Rows shown under “Schedule history” (reschedules / adds / completions — not launches). */
+/** Rows shown under “Schedule history”. */
 export function scheduleLogForDisplay(log: ScheduleLogEntry[] = []): ScheduleLogEntry[] {
-  return log.filter((entry) => entry.action !== 'launched');
+  return log;
+}
+
+/** Activity rows for one visit (launch, complete, reschedule…). */
+export function scheduleLogForVisit(
+  log: ScheduleLogEntry[] | undefined,
+  visitId: string,
+): ScheduleLogEntry[] {
+  return (log ?? []).filter((entry) => entry.visitId === visitId);
+}
+
+/** Rebuild missing launch/done rows from visit on-site fields (legacy saves skipped scheduleLog). */
+export function reconcileVisitScheduleLog(
+  visits: StoredJobVisit[],
+  log: ScheduleLogEntry[] = [],
+): ScheduleLogEntry[] {
+  const next = [...log];
+  const hasEntry = (visitId: string, action: ScheduleLogAction) =>
+    next.some((entry) => entry.visitId === visitId && entry.action === action);
+
+  for (const visit of normalizeVisitsList(visits)) {
+    const visitLog = next.filter((entry) => entry.visitId === visit.id);
+    if (visitLog.length > 0) continue;
+
+    const status = visitStatus(visit);
+    const stamp = visit.completedAt ?? new Date().toISOString();
+
+    if (
+      (status === 'in_progress' || visit.arrivalTime) &&
+      visit.arrivalTime &&
+      !hasEntry(visit.id, 'launched')
+    ) {
+      next.push({
+        at: stamp,
+        userId: 'system',
+        userName: 'System',
+        fromDate: visit.date,
+        fromTime: visit.time,
+        toDate: visit.date,
+        toTime: visit.time,
+        action: 'launched',
+        visitId: visit.id,
+        arrivalTime: visit.arrivalTime,
+        plannedDurationMinutes: visit.durationMinutes,
+      });
+    }
+
+    if (status === 'done' && !hasEntry(visit.id, 'done')) {
+      next.push({
+        at: stamp,
+        userId: 'system',
+        userName: 'System',
+        fromDate: visit.date,
+        fromTime: visit.time,
+        toDate: visit.date,
+        toTime: visit.time,
+        action: 'done',
+        visitId: visit.id,
+        arrivalTime: visit.arrivalTime,
+        departureTime: visit.departureTime,
+        actualDurationMinutes:
+          computeActualVisitDurationMinutes(visit.arrivalTime, visit.departureTime) ?? undefined,
+        plannedDurationMinutes: visit.durationMinutes,
+      });
+    }
+  }
+
+  return next;
 }
 
 export function appendScheduleLog(
@@ -404,8 +490,8 @@ export function buildAddFollowUpVisitUpdates(
   const visit = ensureVisitShape({
     ...newVisit,
     status: 'scheduled',
-    label:
-      newVisit.label?.trim() || defaultVisitNumberLabel(visits),
+    label: newVisit.label?.trim() || defaultVisitNumberLabel(visits),
+    followUpOfVisitId: newVisit.followUpOfVisitId?.trim() || undefined,
   });
   const updatedVisits = [...visits, visit];
 
@@ -602,41 +688,48 @@ export function buildRemoveScheduleLogEntryUpdates(
     (entry.fromDate && entry.toDate && entry.fromDate !== entry.toDate ? 'rescheduled' : undefined);
 
   if (action === 'launched' && entry.visitId) {
+    log.splice(logIndex, 1);
+    for (let i = log.length - 1; i >= 0; i -= 1) {
+      if (log[i].visitId === entry.visitId && log[i].action === 'done') {
+        log.splice(i, 1);
+      }
+    }
     const target = visits.find((visit) => visit.id === entry.visitId);
-    if (!target) {
-      throw new Error('Visit for this history entry no longer exists.');
+    if (target) {
+      visits = patchVisitInList(visits, entry.visitId, {
+        status: 'scheduled',
+        arrivalTime: undefined,
+        departureTime: undefined,
+        completedAt: undefined,
+      });
     }
-    if (visitStatus(target) !== 'in_progress' && !(target.arrivalTime && !target.departureTime)) {
-      throw new Error('This launch cannot be undone — the visit is no longer on site.');
-    }
-    visits = patchVisitInList(visits, entry.visitId, {
-      status: 'scheduled',
-      arrivalTime: undefined,
-      departureTime: undefined,
-      completedAt: undefined,
-    });
+    const payload = schedulePayloadFromVisits({ ...job, scheduleLog: log }, visits);
+    return { ...payload, ...deriveJobStatusAfterVisits(visits, job) };
   } else if (action === 'done' && entry.visitId) {
     const target = visits.find((visit) => visit.id === entry.visitId);
     if (!target) {
       throw new Error('Visit for this history entry no longer exists.');
     }
-    if (visitStatus(target) === 'in_progress') {
+    const stillLaunched = log.some(
+      (row, i) => i !== logIndex && row.visitId === entry.visitId && row.action === 'launched',
+    );
+    log.splice(logIndex, 1);
+    if (stillLaunched) {
       visits = patchVisitInList(visits, entry.visitId, {
-        status: 'scheduled',
-        arrivalTime: undefined,
-        departureTime: undefined,
-        completedAt: undefined,
-      });
-    } else if (visitStatus(target) === 'done') {
-      visits = patchVisitInList(visits, entry.visitId, {
-        status: 'scheduled',
-        arrivalTime: undefined,
+        status: 'in_progress',
         departureTime: undefined,
         completedAt: undefined,
       });
     } else {
-      throw new Error('This visit cannot be reopened from history.');
+      visits = patchVisitInList(visits, entry.visitId, {
+        status: 'scheduled',
+        arrivalTime: undefined,
+        departureTime: undefined,
+        completedAt: undefined,
+      });
     }
+    const payload = schedulePayloadFromVisits({ ...job, scheduleLog: log }, visits);
+    return { ...payload, ...deriveJobStatusAfterVisits(visits, job) };
   } else if (action === 'rescheduled' && entry.visitId) {
     const oldVisit = visits.find((visit) => visit.id === entry.visitId);
     if (!oldVisit) {

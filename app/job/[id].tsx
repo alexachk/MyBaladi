@@ -32,7 +32,7 @@ import { JobMissionNotesGroups } from '../../components/JobMissionNotesGroups';
 import { JobMissionScopeGroups } from '../../components/JobMissionScopeGroups';
 import { JobTeamLine } from '../../components/JobTeamLine';
 import { JobClientSiteEditor } from '../../components/JobClientSiteEditor';
-import { LaunchVisitSheet } from '../../components/LaunchVisitSheet';
+import { LaunchVisitSheet, type VisitOnSiteSheetMode } from '../../components/LaunchVisitSheet';
 import { JobMissionScopesField } from '../../components/JobMissionScopesField';
 import { VisitLinkedNotesField } from '../../components/VisitLinkedNotesField';
 import { JobCommentsThread } from '../../components/JobCommentsThread';
@@ -43,14 +43,17 @@ import { primaryAssigneeFromEntries, type StoredJobAssignee } from '../../lib/jo
 import { canManageJob } from '../../lib/jobAccess';
 import { getEffectivePosition } from '../../lib/appwrite/auth';
 import {
-  buildReopenJobFields,
+  buildCloseJobCardFields,
+  buildFollowUpVisitStatusFields,
+  canCloseJobCard,
   canDeleteJobCard,
   canEditJobClientSite,
   canEditJobContent,
+  canOperateJobVisits,
   canScheduleJobVisits,
+  isJobTerminated,
   jobContentEditBlockReason,
   jobInFollowUpCycle,
-  jobNeedsReopenForFollowUp,
   lockedVisitIdsForUser,
 } from '../../lib/jobEditAccess';
 import { applyJobCardPermissions, jobOwnerUserId } from '../../lib/appwrite/jobCards';
@@ -106,12 +109,12 @@ import { removeCalendarEvent } from '../../lib/calendar';
 import {
   buildAddFollowUpVisitUpdates,
   buildDeleteVisitUpdates,
-  buildMarkVisitDoneUpdates,
   buildRemoveScheduleLogEntryUpdates,
   buildRescheduleVisitUpdates,
   canDeleteVisitFromTimeline,
   formatScheduleLogEntry,
   scheduleLogForDisplay,
+  scheduleLogForVisit,
   formatScheduleWhen,
   jobScheduledAt,
   reminderAtFromSchedule,
@@ -124,6 +127,17 @@ import { colors, radius, shadow, spacing, typography } from '../../constants/the
 import { useClients } from '../../context/ClientsContext';
 import { useAuth, useJobCards } from '../../context/JobCardsContext';
 import {
+  buildUnlockVisitPatch,
+  buildVisitLockPatch,
+  formatSignOffVisitLabel,
+  isVisitLocked,
+  lockedVisitCount,
+  signableDoneVisits,
+  visitSignOffData,
+} from '../../lib/jobSignatures';
+import { promptVisitSignOffReadiness } from '../../lib/jobSignOffReadiness';
+import type { AttachmentVisitLinks } from '../../lib/jobCardAttachments';
+import {
   JOB_PRIORITY_LABELS,
   isJobLocked,
   type JobPriority,
@@ -131,10 +145,10 @@ import {
   type JobCard,
 } from '../../types/jobCard';
 import { formatDate, formatDateTime } from '../../utils/formatDate';
-import { formatVisitOnSiteTimes } from '../../lib/jobVisitLink';
+import { formatVisitOnSiteTimes, visitLinkLabel } from '../../lib/jobVisitLink';
 import {
-  buildFinishVisitUpdates,
   buildLaunchVisitUpdates,
+  buildManualCompleteVisitUpdates,
   buildStopVisitUpdates,
   visitInProgress,
   visitsEligibleForLaunch,
@@ -158,6 +172,8 @@ import {
   normalizeVisitEntries,
   nextScheduledVisit,
   type JobVisitEntry,
+  followUpVisitFor,
+  hasActiveFollowUpVisits,
   normalizeVisitsList,
   scheduledVisitCount,
   sortVisitsTimeline,
@@ -362,8 +378,8 @@ export default function JobDetailScreen() {
   const [addVisitDraft, setAddVisitDraft] = useState<JobVisitEntry[]>([defaultVisitEntry()]);
   const [recapBusyMode, setRecapBusyMode] = useState<RecapDeliveryMode | null>(null);
   const [showExportSheet, setShowExportSheet] = useState(false);
-  const [showLaunchSheet, setShowLaunchSheet] = useState(false);
-  const [launchPreselectId, setLaunchPreselectId] = useState<string | null>(null);
+  const [visitSheetMode, setVisitSheetMode] = useState<VisitOnSiteSheetMode | null>(null);
+  const [visitSheetPreselectId, setVisitSheetPreselectId] = useState<string | null>(null);
   const [pdfPreview, setPdfPreview] = useState<{
     title: string;
     source: PdfPreviewSource;
@@ -544,12 +560,17 @@ export default function JobDetailScreen() {
   }
 
   const locked = isJobLocked(job);
+  const visitLocks = lockedVisitCount(job);
+  const signableVisits = signableDoneVisits(job);
   const canManage = canManageJob(job, user?.$id, isAdmin, teamMembers);
   const userPosition = getEffectivePosition(user);
   const canEdit =
     canManage && canEditJobContent(job, user?.$id, isAdmin, teamMembers);
+  const canCloseCard = canCloseJobCard(job, userPosition, isAdmin);
   const canSchedule =
     canManage && canScheduleJobVisits(job, user?.$id, isAdmin, teamMembers);
+  const canOperateVisits =
+    canManage && canOperateJobVisits(job, user?.$id, isAdmin, teamMembers);
   const canEditSite =
     canManage && canEditJobClientSite(job, user?.$id, isAdmin, teamMembers);
   const editBlockReason = jobContentEditBlockReason(
@@ -558,7 +579,7 @@ export default function JobDetailScreen() {
     isAdmin,
     teamMembers,
   );
-  const reopenOnNextVisit = jobNeedsReopenForFollowUp(job);
+  const jobCompleted = isJobTerminated(job);
   const followUpCycle = jobInFollowUpCycle(job);
   const lockedVisitIds = lockedVisitIdsForUser(
     job,
@@ -570,6 +591,7 @@ export default function JobDetailScreen() {
   const canDelete =
     canManage && canDeleteJobCard(job, user?.$id, isAdmin, teamMembers);
   const timelineVisits = sortVisitsTimeline(job.visits ?? []);
+  const activeFollowUp = hasActiveFollowUpVisits(timelineVisits);
   const activeVisit = visitInProgress(timelineVisits);
   const nextVisit = nextScheduledVisit(normalizeVisitsList(job.visits ?? []));
   const persistScheduleUpdates = async (
@@ -634,12 +656,48 @@ export default function JobDetailScreen() {
       Alert.alert('Cannot edit', editBlockReason || 'Changes not allowed.');
       return;
     }
+    if (status === 'completed' || status === 'pending_review') {
+      return;
+    }
     setUpdating(true);
     try {
       await updateJobCard(job.id, { status });
     } finally {
       setUpdating(false);
     }
+  };
+
+  const handleCloseJobCard = () => {
+    if (!user || !canCloseCard) return;
+    Alert.alert(
+      'Close job card',
+      'Marks this job completed and locks it for the field team. They can still schedule a follow-up visit later.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Close & lock',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setUpdating(true);
+              try {
+                await updateJobCard(
+                  job.id,
+                  buildCloseJobCardFields(user.$id, job),
+                );
+              } catch (error) {
+                Alert.alert(
+                  'Close job card',
+                  error instanceof Error ? error.message : 'Could not close this job.',
+                );
+              } finally {
+                setUpdating(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   const handleSaveMission = async () => {
@@ -711,6 +769,10 @@ export default function JobDetailScreen() {
       missionScopes: patch.missionScopes ?? job.missionScopes,
       missionNotes: job.missionNotes,
       equipmentItems: patch.equipmentItems ?? job.equipmentItems,
+      initialScheduledDate: patch.initialScheduledDate ?? job.initialScheduledDate,
+      initialScheduledTime: patch.initialScheduledTime ?? job.initialScheduledTime,
+      scheduleLog: patch.scheduleLog ?? job.scheduleLog,
+      visits: patch.visits ?? job.visits,
     });
   };
 
@@ -741,22 +803,56 @@ export default function JobDetailScreen() {
   };
 
   const launchEligibleVisits = visitsEligibleForLaunch(timelineVisits);
+  const completeEligibleVisits = useMemo(
+    () =>
+      timelineVisits.filter((visit) => {
+        const status = visitStatus(visit);
+        return status === 'scheduled' || status === 'in_progress';
+      }),
+    [timelineVisits],
+  );
 
-  const openLaunchSheet = (preselectVisitId?: string) => {
-    if (!canEdit) return;
-    if (!launchEligibleVisits.length) {
-      Alert.alert('Launch', 'No scheduled visits. Add or reschedule a visit first.');
+  const closeVisitSheet = () => {
+    setVisitSheetMode(null);
+    setVisitSheetPreselectId(null);
+  };
+
+  const openVisitSheet = (mode: VisitOnSiteSheetMode, preselectVisitId?: string) => {
+    if (!canOperateVisits) return;
+    const pool = mode === 'launch' ? launchEligibleVisits : completeEligibleVisits;
+    if (!pool.length) {
+      Alert.alert(
+        mode === 'launch' ? 'Mark launched' : 'Complete visit',
+        mode === 'launch'
+          ? 'No scheduled visits. Add or reschedule a visit first.'
+          : 'No open visits to complete.',
+      );
       return;
     }
-    setLaunchPreselectId(preselectVisitId ?? null);
+    setVisitSheetMode(mode);
+    setVisitSheetPreselectId(preselectVisitId ?? null);
     loadPersonnel().catch(() => undefined);
-    setShowLaunchSheet(true);
+  };
+
+  const promptVisitClose = (visitId: string) => {
+    Alert.alert('Visit completed', 'Sign off or lock this visit?', [
+      { text: 'Later', style: 'cancel' },
+      {
+        text: 'Lock without signature',
+        onPress: () => handleLockVisit(visitId),
+      },
+      {
+        text: 'Sign-off',
+        onPress: () => handleSignOff(visitId),
+      },
+    ]);
   };
 
   const handleLaunchVisit = async (
     visitId: string,
     locationChoice: LaunchVisitLocationChoice,
     team: StoredJobAssignee[],
+    arrivalTime: string,
   ) => {
     if (!canEdit || !user) return;
     setUpdating(true);
@@ -770,30 +866,38 @@ export default function JobDetailScreen() {
         },
         team,
         locationChoice,
+        arrivalTime,
       );
       await persistOnSitePatch(patch);
-      setShowLaunchSheet(false);
-      setLaunchPreselectId(null);
+      closeVisitSheet();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to launch visit.';
-      Alert.alert('Launch', message);
+      const message = error instanceof Error ? error.message : 'Unable to mark visit launched.';
+      Alert.alert('Visit', message);
     } finally {
       setUpdating(false);
     }
   };
 
-  const handleFinishOnSite = async () => {
+  const handleCompleteVisit = async (
+    visitId: string,
+    arrivalTime: string,
+    departureTime: string,
+  ) => {
     if (!canEdit || !user) return;
     setUpdating(true);
     try {
-      const patch = buildFinishVisitUpdates(job, {
-        id: user.$id,
-        name: user.name || user.email || 'User',
-      });
+      const patch = buildManualCompleteVisitUpdates(
+        job,
+        visitId,
+        { id: user.$id, name: user.name || user.email || 'User' },
+        { arrivalTime, departureTime },
+      );
       await persistOnSitePatch(patch);
+      closeVisitSheet();
+      promptVisitClose(visitId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to finish visit.';
-      Alert.alert('Finish', message);
+      const message = error instanceof Error ? error.message : 'Unable to complete visit.';
+      Alert.alert('Complete visit', message);
     } finally {
       setUpdating(false);
     }
@@ -924,23 +1028,6 @@ export default function JobDetailScreen() {
     );
   };
 
-  const handleMarkVisitDone = async (visitId: string) => {
-    if (!canEdit || !user) return;
-    setUpdating(true);
-    try {
-      const scheduleUpdates = buildMarkVisitDoneUpdates(job, visitId, {
-        id: user.$id,
-        name: user.name || user.email || 'User',
-      });
-      await persistScheduleUpdates(scheduleUpdates);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to mark visit done.';
-      Alert.alert('Visit', message);
-    } finally {
-      setUpdating(false);
-    }
-  };
-
   const handleAddFollowUp = async () => {
     if (!canSchedule || !user) return;
     const stored = normalizeVisitEntries(addVisitDraft);
@@ -951,14 +1038,27 @@ export default function JobDetailScreen() {
     const runAdd = async () => {
       setUpdating(true);
       try {
-        const scheduleUpdates = buildAddFollowUpVisitUpdates(job, stored[0], {
-          id: user.$id,
-          name: user.name || user.email || 'User',
-        });
-        const reopen = reopenOnNextVisit ? buildReopenJobFields(job) : {};
+        const priorVisits = normalizeVisitsList(job.visits ?? []);
+        const lastDoneVisit = jobCompleted
+          ? [...priorVisits]
+              .filter((visit) => visitStatus(visit) === 'done')
+              .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0]
+          : undefined;
+        const scheduleUpdates = buildAddFollowUpVisitUpdates(
+          job,
+          {
+            ...stored[0],
+            ...(lastDoneVisit ? { followUpOfVisitId: lastDoneVisit.id } : {}),
+          },
+          {
+            id: user.$id,
+            name: user.name || user.email || 'User',
+          },
+        );
+        const statusPatch = buildFollowUpVisitStatusFields(job, scheduleUpdates.visits ?? []);
         await updateJobCard(job.id, {
           ...scheduleUpdates,
-          ...reopen,
+          ...statusPatch,
           reminderAt: job.reminderAt,
           notificationId: job.notificationId,
           assignees: job.assignees,
@@ -968,7 +1068,7 @@ export default function JobDetailScreen() {
           missionNotes: job.missionNotes,
           equipmentItems: job.equipmentItems,
         });
-        const updatedJob = { ...job, ...scheduleUpdates, ...reopen };
+        const updatedJob = { ...job, ...scheduleUpdates, ...statusPatch };
         if (updatedJob.calendarEventId || updatedJob.scheduledDate) {
           try {
             await syncSingleJobToPhoneCalendar(updatedJob, user.$id, updateJobCard);
@@ -990,17 +1090,6 @@ export default function JobDetailScreen() {
         setUpdating(false);
       }
     };
-    if (reopenOnNextVisit) {
-      Alert.alert(
-        'Reopen mission',
-        'Schedules a new visit and reopens this job card so the team can work again. Prior supervisor approval will be cleared.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Reopen', onPress: () => runAdd() },
-        ],
-      );
-      return;
-    }
     await runAdd();
   };
 
@@ -1199,17 +1288,50 @@ export default function JobDetailScreen() {
     );
   };
 
-  const handleSignOff = () => {
-    router.push(`/job/sign/${job.id}`);
+  const handleSignOff = (visitId?: string) => {
+    const target = visitId ?? signableDoneVisits(job)[0]?.id;
+    if (!target) {
+      Alert.alert('Sign-off', 'Finish a visit before signing or locking.');
+      return;
+    }
+    promptVisitSignOffReadiness(job, target, () => {
+      router.push(`/job/sign/${job.id}?visitId=${encodeURIComponent(target)}`);
+    });
   };
 
-  const handleUnlock = () => {
-    Alert.alert('Unlock', 'Remove the lock so the technician can edit again?', [
+  const handleLockVisit = (visitId: string) => {
+    const visits = normalizeVisitsList(job.visits ?? []);
+    const visit = visits.find((row) => row.id === visitId);
+    const label = visit ? formatSignOffVisitLabel(visit, visits) : 'this visit';
+    const confirmLock = () => {
+      Alert.alert(
+        'Lock visit',
+        `Lock ${label} without signatures? Its mission and work records will be read-only.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Lock',
+            onPress: async () => {
+              if (!user?.$id) return;
+              await updateJobCard(job.id, buildVisitLockPatch(job, visitId, user.$id));
+            },
+          },
+        ],
+      );
+    };
+    promptVisitSignOffReadiness(job, visitId, confirmLock);
+  };
+
+  const handleUnlockVisit = (visitId: string) => {
+    const visits = normalizeVisitsList(job.visits ?? []);
+    const visit = visits.find((row) => row.id === visitId);
+    const label = visit ? formatSignOffVisitLabel(visit, visits) : 'this visit';
+    Alert.alert('Unlock visit', `Remove the lock on ${label}?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Unlock',
         onPress: async () => {
-          await updateJobCard(job.id, { lockedAt: null, lockedBy: null });
+          await updateJobCard(job.id, buildUnlockVisitPatch(job, visitId));
         },
       },
     ]);
@@ -1229,17 +1351,6 @@ export default function JobDetailScreen() {
   const handleFollowUp = () => {
     if (!canSchedule) {
       Alert.alert('Add visit', editBlockReason || 'You cannot add a visit on this card.');
-      return;
-    }
-    if (reopenOnNextVisit) {
-      Alert.alert(
-        'Add visit',
-        'Schedules a new visit on this job card and reopens field work. Prior supervisor approval is cleared. Completed visits stay in history — only Level 2/3 can change their mission or work records.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Continue', onPress: openFollowUpVisitForm },
-        ],
-      );
       return;
     }
     openFollowUpVisitForm();
@@ -1282,15 +1393,23 @@ export default function JobDetailScreen() {
   const handleAttachmentsChange = async ({
     photoIds,
     documentIds,
+    attachmentVisitLinks,
   }: {
     photoIds: string[];
     documentIds: string[];
+    attachmentVisitLinks: AttachmentVisitLinks;
   }) => {
     if (!canEdit) {
       Alert.alert('Cannot edit', editBlockReason || 'Changes not allowed.');
       return;
     }
-    await updateJobCard(job.id, { photoIds, documentIds });
+    try {
+      await updateJobCard(job.id, { photoIds, documentIds, attachmentVisitLinks });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save attachments.';
+      Alert.alert('Attachments', message);
+      throw error;
+    }
   };
 
   return (
@@ -1380,8 +1499,11 @@ export default function JobDetailScreen() {
               style={styles.lockBannerIcon}
             />
             <Text style={styles.lockText}>
-              Locked {job.lockedAt ? `· ${formatDate(job.lockedAt)}` : ''}
-              {!canEdit && canSchedule ? ' · new visit can reopen' : ''}
+              {visitLocks > 0
+                ? `${visitLocks} visit${visitLocks === 1 ? '' : 's'} locked`
+                : 'Locked'}
+              {job.lockedAt ? ` · ${formatDate(job.lockedAt)}` : ''}
+              {signableVisits.length ? ' · other visits still open' : ''}
             </Text>
           </View>
         ) : null}
@@ -1390,9 +1512,7 @@ export default function JobDetailScreen() {
         ) : null}
       </View>
 
-      {/* On-site action toolbar */}
-      {!locked ? (
-        <View style={styles.actionToolbar}>
+      <View style={styles.actionToolbar}>
           {job.status === 'draft' && canEdit ? (
             <PrimaryButton
               label="Plan mission"
@@ -1401,42 +1521,36 @@ export default function JobDetailScreen() {
               disabled={updating}
             />
           ) : null}
-          {(job.status === 'planned' || job.status === 'in_progress') && canEdit && !activeVisit ? (
+          {canOperateVisits && launchEligibleVisits.length > 0 ? (
             <PrimaryButton
-              label="Launch on site"
+              label="Mark launched"
               icon="play-circle-outline"
-              onPress={() => openLaunchSheet()}
+              variant="secondary"
+              onPress={() => openVisitSheet('launch')}
               disabled={updating}
             />
           ) : null}
-          {activeVisit && canEdit ? (
-            <>
-              <PrimaryButton
-                label="Finish on site"
-                icon="stop-circle-outline"
-                variant="secondary"
-                onPress={handleFinishOnSite}
-                disabled={updating}
-              />
-              <PrimaryButton
-                label="Stop visit"
-                icon="close-circle-outline"
-                variant="ghost"
-                onPress={() => handleStopVisit(activeVisit.id)}
-                disabled={updating}
-              />
-            </>
+          {canOperateVisits && completeEligibleVisits.length > 0 ? (
+            <PrimaryButton
+              label="Complete visit"
+              icon="checkmark-circle-outline"
+              onPress={() => openVisitSheet('complete')}
+              disabled={updating}
+            />
           ) : null}
-          {job.status === 'pending_review' || (job.finishedAt && !activeVisit) ? (
-            <PrimaryButton label="Sign-off & lock" icon="create-outline" onPress={handleSignOff} />
+          {signableVisits.length > 0 ? (
+            <PrimaryButton
+              label="Sign-off visit"
+              icon="create-outline"
+              onPress={() => handleSignOff()}
+            />
           ) : null}
         </View>
-      ) : null}
 
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={[styles.cardTitle, styles.cardHeaderRowTitle]}>Visits</Text>
-          {canSchedule ? (
+          {canSchedule && !jobCompleted ? (
             <Pressable
               onPress={() => {
                 setShowAddVisit((open) => !open);
@@ -1450,9 +1564,7 @@ export default function JobDetailScreen() {
               }}
               style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]}
             >
-              <Text style={styles.linkBtnText}>
-                {showAddVisit ? 'Cancel' : reopenOnNextVisit ? 'Reopen · add visit' : 'Add visit'}
-              </Text>
+              <Text style={styles.linkBtnText}>{showAddVisit ? 'Cancel' : 'Add visit'}</Text>
             </Pressable>
           ) : null}
         </View>
@@ -1469,8 +1581,8 @@ export default function JobDetailScreen() {
         <Text style={styles.visitTimelineTitle}>Visit timeline</Text>
         {followUpCycle ? (
           <Text style={styles.followUpHint}>
-            Another visit in progress — launch and stop apply to the active visit. Completed visits are
-            read-only here; Level 2/3 can still adjust their mission and work records.
+            Prior visits keep their activity log below. Finish the follow-up visit before sign-off.
+            Locked visits stay read-only; Level 2/3 can still adjust mission and work records.
           </Text>
         ) : null}
         {timelineVisits.length > 0 ? (
@@ -1478,6 +1590,12 @@ export default function JobDetailScreen() {
             {timelineVisits.map((visit, index) => {
               const status = visitStatus(visit);
               const isRescheduling = rescheduleVisitId === visit.id;
+              const signOff = visitSignOffData(visit, job);
+              const visitLocked = isVisitLocked(visit, job);
+              const visitLog = scheduleLogForVisit(job.scheduleLog, visit.id);
+              const followUpChild = followUpVisitFor(timelineVisits, visit.id);
+              const staleDone =
+                status === 'done' && !visitLocked && activeFollowUp && Boolean(followUpChild);
               return (
                 <View key={visit.id} style={styles.visitRow}>
                   <View style={styles.visitRowTop}>
@@ -1491,12 +1609,12 @@ export default function JobDetailScreen() {
                     </View>
                     {canSchedule && status === 'scheduled' ? (
                       <View style={styles.visitActions}>
-                        {canEdit ? (
+                        {canOperateVisits ? (
                           <>
                             <Pressable
-                              onPress={() => openLaunchSheet(visit.id)}
+                              onPress={() => openVisitSheet('launch', visit.id)}
                               disabled={updating || Boolean(activeVisit)}
-                              accessibilityLabel="Launch on site"
+                              accessibilityLabel="Mark visit launched"
                               accessibilityRole="button"
                               style={({ pressed }) => [
                                 styles.visitIconBtn,
@@ -1507,9 +1625,9 @@ export default function JobDetailScreen() {
                               <Ionicons name="play-circle-outline" size={22} color={colors.primaryDark} />
                             </Pressable>
                             <Pressable
-                              onPress={() => handleMarkVisitDone(visit.id)}
+                              onPress={() => openVisitSheet('complete', visit.id)}
                               disabled={updating}
-                              accessibilityLabel="Mark visit done"
+                              accessibilityLabel="Complete visit"
                               accessibilityRole="button"
                               style={({ pressed }) => [
                                 styles.visitIconBtn,
@@ -1557,9 +1675,9 @@ export default function JobDetailScreen() {
                     {canEdit && status === 'in_progress' ? (
                       <View style={styles.visitActions}>
                         <Pressable
-                          onPress={handleFinishOnSite}
+                          onPress={() => openVisitSheet('complete', visit.id)}
                           disabled={updating}
-                          accessibilityLabel="Finish on site"
+                          accessibilityLabel="Complete visit"
                           accessibilityRole="button"
                           style={({ pressed }) => [
                             styles.visitIconBtn,
@@ -1567,12 +1685,12 @@ export default function JobDetailScreen() {
                             pressed && styles.pressed,
                           ]}
                         >
-                          <Ionicons name="flag-outline" size={22} color={colors.success} />
+                          <Ionicons name="checkmark-circle-outline" size={22} color={colors.success} />
                         </Pressable>
                         <Pressable
                           onPress={() => handleStopVisit(visit.id)}
                           disabled={updating}
-                          accessibilityLabel="Stop visit"
+                          accessibilityLabel="Undo launch"
                           accessibilityRole="button"
                           style={({ pressed }) => [
                             styles.visitIconBtn,
@@ -1593,6 +1711,16 @@ export default function JobDetailScreen() {
                         )}`
                       : ''}
                   </Text>
+                  {visit.followUpOfVisitId ? (
+                    <Text style={styles.visitFollowUpLink}>
+                      Follow-up to {visitLinkLabel(timelineVisits, visit.followUpOfVisitId)}
+                    </Text>
+                  ) : null}
+                  {followUpChild ? (
+                    <Text style={styles.visitFollowUpLink}>
+                      Continued in {visitLinkLabel(timelineVisits, followUpChild.id)}
+                    </Text>
+                  ) : null}
                   {formatVisitOnSiteTimes(visit) ? (
                     <Text style={styles.visitRowMeta}>
                       Actual · {formatVisitOnSiteTimes(visit)}
@@ -1614,8 +1742,56 @@ export default function JobDetailScreen() {
                     numberOfLines={2}
                     style={styles.visitRowTeam}
                   />
+                  {visitLog.length ? (
+                    <View style={styles.visitLogBlock}>
+                      <Text style={styles.visitLogTitle}>Visit log</Text>
+                      {visitLog.map((entry, logIdx) => (
+                        <Text key={`${entry.at}-${logIdx}`} style={styles.visitLogLine}>
+                          {formatScheduleLogEntry(entry, timelineVisits)}
+                        </Text>
+                      ))}
+                    </View>
+                  ) : null}
                   {status === 'done' && visit.completedAt ? (
                     <Text style={styles.visitRowMeta}>Completed · {formatDateTime(visit.completedAt)}</Text>
+                  ) : null}
+                  {visitLocked ? (
+                    <Text style={styles.visitRowMeta}>
+                      Locked
+                      {signOff.lockedAt ? ` · ${formatDateTime(signOff.lockedAt)}` : ''}
+                      {signOff.clientSignatureName
+                        ? ` · ${signOff.clientSignatureName}`
+                        : signOff.clientSignatureId || signOff.technicianSignatureId
+                          ? ' · Signed'
+                          : ' · No signature'}
+                    </Text>
+                  ) : null}
+                  {status === 'done' && !visitLocked && !staleDone ? (
+                    <View style={styles.visitSignActions}>
+                      <Pressable
+                        onPress={() => handleSignOff(visit.id)}
+                        style={({ pressed }) => [styles.visitSignBtn, pressed && styles.pressed]}
+                      >
+                        <Ionicons name="create-outline" size={14} color={colors.black} />
+                        <Text style={styles.visitSignBtnText}>Sign-off</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => handleLockVisit(visit.id)}
+                        style={({ pressed }) => [styles.visitSignBtn, pressed && styles.pressed]}
+                      >
+                        <Ionicons name="lock-closed-outline" size={14} color={colors.grey600} />
+                        <Text style={styles.visitSignBtnText}>Lock</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                  {visitLocked && (isAdmin || canReview) ? (
+                    <Pressable
+                      onPress={() => handleUnlockVisit(visit.id)}
+                      style={({ pressed }) => [styles.visitSignBtn, pressed && styles.pressed]}
+                    >
+                      <Ionicons name="lock-open-outline" size={14} color={colors.info} />
+                      <Text style={[styles.visitSignBtnText, { color: colors.info }]}>Unlock visit</Text>
+                    </Pressable>
                   ) : null}
                   {isRescheduling && canEdit ? (
                     <View style={styles.rescheduleForm}>
@@ -1669,7 +1845,7 @@ export default function JobDetailScreen() {
               allJobs={jobCards}
             />
             <PrimaryButton
-              label={reopenOnNextVisit ? 'Reopen & program visit' : 'Program visit'}
+              label="Program visit"
               icon="add-circle-outline"
               onPress={handleAddFollowUp}
               disabled={updating}
@@ -1680,8 +1856,8 @@ export default function JobDetailScreen() {
         {scheduleLogForDisplay(job.scheduleLog).length ? (
           <View style={styles.historyBlock}>
             <Text style={styles.historyTitle}>Schedule history</Text>
-            {[...scheduleLogForDisplay(job.scheduleLog)].reverse().map((entry) => {
-              const logIndex = (job.scheduleLog ?? []).indexOf(entry);
+            {[...scheduleLogForDisplay(job.scheduleLog)].reverse().map((entry, reversedIdx) => {
+              const logIndex = (job.scheduleLog ?? []).length - 1 - reversedIdx;
               return (
                 <View key={`${entry.at}-${logIndex}`} style={styles.historyRow}>
                   <View style={styles.historyRowMain}>
@@ -1920,36 +2096,58 @@ export default function JobDetailScreen() {
         </View>
       </View>
 
-      {canEdit ? (
+      {canEdit || canCloseCard ? (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Update status</Text>
-          <StatusPicker value={job.status} onChange={setStatus} />
-          <Text style={[styles.cardTitle, styles.priorityTitle]}>Update priority</Text>
-          <View style={styles.priorityRow}>
-            {(Object.keys(JOB_PRIORITY_LABELS) as JobPriority[]).map((level) => {
-              const selected = job.priority === level;
-              return (
-                <Pressable
-                  key={level}
-                  disabled={updating}
-                  onPress={() => setPriority(level)}
-                  style={[styles.priorityChip, selected && styles.priorityChipActive]}
-                >
-                  <Text
-                    style={[styles.priorityChipText, selected && styles.priorityChipTextActive]}
-                  >
-                    {JOB_PRIORITY_LABELS[level]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <Text style={styles.cardTitle}>Job status</Text>
+          {canEdit ? (
+            <StatusPicker value={job.status} onChange={setStatus} />
+          ) : (
+            <StatusBadge status={job.status} />
+          )}
+          {canCloseCard ? (
+            <Pressable
+              onPress={handleCloseJobCard}
+              disabled={updating}
+              style={({ pressed }) => [styles.closeCardBtn, pressed && styles.pressed]}
+            >
+              <Ionicons name="lock-closed-outline" size={18} color={colors.error} />
+              <Text style={styles.closeCardBtnText}>Close & lock job card</Text>
+            </Pressable>
+          ) : null}
+          {canEdit ? (
+            <>
+              <Text style={[styles.cardTitle, styles.priorityTitle]}>Update priority</Text>
+              <View style={styles.priorityRow}>
+                {(Object.keys(JOB_PRIORITY_LABELS) as JobPriority[]).map((level) => {
+                  const selected = job.priority === level;
+                  return (
+                    <Pressable
+                      key={level}
+                      disabled={updating}
+                      onPress={() => setPriority(level)}
+                      style={[styles.priorityChip, selected && styles.priorityChipActive]}
+                    >
+                      <Text
+                        style={[styles.priorityChipText, selected && styles.priorityChipTextActive]}
+                      >
+                        {JOB_PRIORITY_LABELS[level]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </>
+          ) : null}
         </View>
       ) : null}
 
       <JobAttachments
         photoIds={job.photoIds ?? []}
         documentIds={job.documentIds ?? []}
+        attachmentVisitLinks={job.attachmentVisitLinks ?? {}}
+        visits={job.visits ?? []}
+        visitOptions={missionVisitOptions}
+        lockedVisitIds={[...lockedVisitIds]}
         disabled={!canEdit}
         onChange={handleAttachmentsChange}
       />
@@ -1967,6 +2165,9 @@ export default function JobDetailScreen() {
 
       <JobRecapHistory
         recaps={recaps}
+        job={job}
+        actor={{ id: user!.$id, name: user!.name || user!.email || 'User' }}
+        defaultRecipients={recapDefaultRecipients}
         canDelete={canEdit}
         deletingId={deletingRecapId}
         onDelete={handleDeleteRecap}
@@ -1982,18 +2183,13 @@ export default function JobDetailScreen() {
           onPress={() => setShowExportSheet(true)}
           disabled={recapBusyMode !== null}
         />
-        <PrimaryButton
-          label="Open follow-up"
-          icon="git-branch-outline"
-          variant="secondary"
-          onPress={handleFollowUp}
-        />
-        {locked && (isAdmin || canReview) ? (
+        {canSchedule ? (
           <PrimaryButton
-            label="Unlock"
-            icon="lock-open-outline"
+            label={jobCompleted ? 'Reopen' : 'Open follow-up'}
+            icon={jobCompleted ? 'lock-open-outline' : 'git-branch-outline'}
             variant="secondary"
-            onPress={handleUnlock}
+            onPress={handleFollowUp}
+            disabled={updating}
           />
         ) : null}
         {canDelete ? (
@@ -2024,22 +2220,25 @@ export default function JobDetailScreen() {
       onClose={() => setPdfPreview(null)}
     />
     <LaunchVisitSheet
-      visible={showLaunchSheet}
+      visible={visitSheetMode !== null}
+      mode={visitSheetMode ?? 'launch'}
       job={job}
-      visits={launchEligibleVisits}
+      visits={visitSheetMode === 'complete' ? completeEligibleVisits : launchEligibleVisits}
       jobSiteAddress={job.siteAddress}
-      initialVisitId={launchPreselectId}
+      initialVisitId={visitSheetPreselectId}
       personnel={personnel}
       personnelLoading={personnelLoading}
       onLoadPersonnel={() => {
         loadPersonnel().catch(() => undefined);
       }}
       busy={updating}
-      onClose={() => {
-        setShowLaunchSheet(false);
-        setLaunchPreselectId(null);
-      }}
-      onLaunch={(visitId, location, team) => void handleLaunchVisit(visitId, location, team)}
+      onClose={closeVisitSheet}
+      onLaunch={(visitId, location, team, arrivalTime) =>
+        void handleLaunchVisit(visitId, location, team, arrivalTime)
+      }
+      onComplete={(visitId, arrivalTime, departureTime) =>
+        void handleCompleteVisit(visitId, arrivalTime, departureTime)
+      }
     />
     </>
   );
@@ -2252,6 +2451,30 @@ const styles = StyleSheet.create({
   visitIconBtnDisabled: { opacity: 0.4 },
   visitRowWhen: { ...typography.body, color: colors.grey600 },
   visitRowMeta: { ...typography.caption, color: colors.grey600 },
+  visitFollowUpLink: { ...typography.caption, color: colors.info, marginTop: 2, fontWeight: '600' },
+  visitLogBlock: {
+    marginTop: spacing.xs,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.grey100,
+    gap: 2,
+  },
+  visitLogTitle: { ...typography.caption, color: colors.grey600, fontWeight: '700', marginBottom: 2 },
+  visitLogLine: { ...typography.caption, color: colors.grey600 },
+  visitSignActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.xs },
+  visitSignBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.grey200,
+    backgroundColor: colors.white,
+  },
+  visitSignBtnText: { ...typography.caption, color: colors.black, fontWeight: '600' },
   visitRowTeam: { marginTop: 2 },
   visitRowLocation: { ...typography.caption, color: colors.grey600, flex: 1 },
   visitLocationRow: {
@@ -2365,6 +2588,24 @@ const styles = StyleSheet.create({
   },
   priorityTitle: {
     marginTop: spacing.lg,
+  },
+  closeCardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.errorLight,
+    backgroundColor: colors.errorLight,
+  },
+  closeCardBtnText: {
+    ...typography.caption,
+    color: colors.error,
+    fontWeight: '700',
   },
   detailRow: {
     marginBottom: spacing.md,

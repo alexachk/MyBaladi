@@ -40,6 +40,33 @@ export function minutesBetweenHHmm(start: string, end: string): number | null {
   return diff;
 }
 
+export function hhmmFromDate(date: Date): string {
+  const h = date.getHours();
+  const m = date.getMinutes();
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+export function dateFromHhmm(base: Date, hhmm: string): Date | null {
+  const parts = hhmm.trim().split(':');
+  if (parts.length < 2) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isFinite(h) || !Number.isFinite(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  const out = new Date(base);
+  out.setHours(h, m, 0, 0);
+  return out;
+}
+
+export function validateOnSiteTimeRange(arrival: string, departure: string): string | null {
+  const a = arrival.trim();
+  const d = departure.trim();
+  if (!a || !d) return 'Enter arrival and departure times.';
+  if (computeActualVisitDurationMinutes(a, d) == null) return 'Use valid times (HH:mm).';
+  return null;
+}
+
 export function computeActualVisitDurationMinutes(
   arrival: string | undefined,
   departure: string | undefined,

@@ -1,4 +1,4 @@
-import { downloadAttachmentAsDataUri } from './appwrite/storage';
+import { downloadAttachmentAsDataUri, downloadAttachmentToCache } from './appwrite/storage';
 
 export type PdfPreviewSource =
   | { kind: 'uri'; uri: string }
@@ -23,6 +23,21 @@ function bytesToBase64(bytes: Uint8Array): string {
 function base64FromDataUri(dataUri: string): string {
   const comma = dataUri.indexOf(',');
   return comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+}
+
+export async function resolvePdfShareUri(
+  source: PdfPreviewSource,
+  fallbackName: string,
+): Promise<{ uri: string; mimeType: string; name: string }> {
+  if (source.kind === 'uri') {
+    return { uri: source.uri, mimeType: 'application/pdf', name: fallbackName };
+  }
+  const cached = await downloadAttachmentToCache(source.fileId);
+  return {
+    uri: cached.uri,
+    mimeType: cached.mimeType || 'application/pdf',
+    name: cached.name || fallbackName,
+  };
 }
 
 /** Raw base64 payload for pdf.js (no data: prefix). */

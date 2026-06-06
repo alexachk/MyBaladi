@@ -1,3 +1,6 @@
+import { File, Paths } from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
+import { Linking, Platform } from 'react-native';
 import { ID, Storage } from 'react-native-appwrite';
 import { client } from './client';
 import { APPWRITE_ENDPOINT, APPWRITE_PROJECT_ID } from './config';
@@ -34,15 +37,13 @@ export async function deleteAttachment(fileId: string): Promise<void> {
   }
 }
 
-/**
- * Build a direct view URL for an Appwrite file. Use for <Image src={...}>.
- * The current user's session is used implicitly through the SDK.
- */
+/** Unauthenticated URL — only works for buckets with read("any") / read("guests"). */
 export function getFileViewUrl(fileId: string): string {
   const endpoint = APPWRITE_ENDPOINT.replace(/\/$/, '');
   return `${endpoint}/storage/buckets/${ATTACHMENT_BUCKET_ID}/files/${fileId}/view?project=${APPWRITE_PROJECT_ID}`;
 }
 
+/** Unauthenticated URL — only works for buckets with read("any") / read("guests"). */
 export function getFilePreviewUrl(fileId: string, width = 600): string {
   const endpoint = APPWRITE_ENDPOINT.replace(/\/$/, '');
   return `${endpoint}/storage/buckets/${ATTACHMENT_BUCKET_ID}/files/${fileId}/preview?project=${APPWRITE_PROJECT_ID}&width=${width}`;
@@ -73,13 +74,105 @@ function bytesToBase64(bytes: Uint8Array): string {
   return result;
 }
 
+function safeCacheName(fileId: string, name: string): string {
+  const base = (name || fileId).replace(/[^\w.\-]+/g, '_');
+  return `att-${fileId}-${base}`;
+}
+
+export interface CachedAttachment {
+  uri: string;
+  mimeType: string;
+  name: string;
+  file: File;
+}
+
+function isImageAttachment(mimeType: string, name: string): boolean {
+  if (mimeType.startsWith('image/')) return true;
+  return /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name);
+}
+
+function isPdfAttachment(mimeType: string, name: string): boolean {
+  return mimeType === 'application/pdf' || /\.pdf$/i.test(name);
+}
+
+export async function downloadAttachmentToCache(fileId: string): Promise<CachedAttachment> {
+  const meta = await getStorage().getFile({ bucketId: ATTACHMENT_BUCKET_ID, fileId });
+  const buffer = await getStorage().getFileDownload({ bucketId: ATTACHMENT_BUCKET_ID, fileId });
+  const bytes = new Uint8Array(buffer as ArrayBuffer);
+  const filename = safeCacheName(fileId, meta.name);
+  const file = new File(Paths.cache, filename);
+  if (file.exists) file.delete();
+  file.write(bytes);
+  return {
+    uri: file.uri,
+    mimeType: meta.mimeType || 'application/octet-stream',
+    name: meta.name || filename,
+    file,
+  };
+}
+
+export interface OpenAttachmentHandlers {
+  onPdfPreview?: (input: { fileId: string; name: string }) => void;
+  onImagePreview?: (input: { fileId: string; uri: string; name: string; mimeType: string }) => void;
+}
+
+/** Download via authenticated SDK, then open in the default app (or in-app preview on iOS). */
+export async function openAttachment(fileId: string, handlers: OpenAttachmentHandlers = {}): Promise<void> {
+  const cached = await downloadAttachmentToCache(fileId);
+  const { uri, mimeType, name, file } = cached;
+
+  if (isPdfAttachment(mimeType, name)) {
+    handlers.onPdfPreview?.({ fileId, name });
+    if (handlers.onPdfPreview) return;
+  }
+
+  if (isImageAttachment(mimeType, name)) {
+    handlers.onImagePreview?.({ fileId, uri, name, mimeType });
+    if (handlers.onImagePreview) return;
+  }
+
+  if (Platform.OS === 'android') {
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: file.contentUri,
+      flags: 1,
+      type: mimeType || undefined,
+    });
+    return;
+  }
+
+  if (await Linking.canOpenURL(uri)) {
+    await Linking.openURL(uri);
+    return;
+  }
+
+  throw new Error('No app available to open this file.');
+}
+
+export async function getAttachmentPreviewUri(fileId: string, width = 600): Promise<string | null> {
+  try {
+    const buffer = await getStorage().getFilePreview({
+      bucketId: ATTACHMENT_BUCKET_ID,
+      fileId,
+      width,
+    });
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+    return `data:image/jpeg;base64,${bytesToBase64(bytes)}`;
+  } catch {
+    try {
+      const cached = await downloadAttachmentToCache(fileId);
+      return cached.uri;
+    } catch {
+      return null;
+    }
+  }
+}
+
 export async function downloadAttachmentAsDataUri(fileId: string): Promise<string | null> {
   try {
-    const response = await fetch(getFileViewUrl(fileId));
-    if (!response.ok) return null;
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
-    const buffer = await response.arrayBuffer();
-    const base64 = bytesToBase64(new Uint8Array(buffer));
+    const meta = await getStorage().getFile({ bucketId: ATTACHMENT_BUCKET_ID, fileId });
+    const buffer = await getStorage().getFileView({ bucketId: ATTACHMENT_BUCKET_ID, fileId });
+    const contentType = meta.mimeType || 'application/octet-stream';
+    const base64 = bytesToBase64(new Uint8Array(buffer as ArrayBuffer));
     return `data:${contentType};base64,${base64}`;
   } catch {
     return null;

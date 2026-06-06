@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DateTimeField } from './DateTimeField';
 import { MapPinPickerModal } from './MapPinPickerModal';
 import { JobAssigneesField } from './JobAssigneesField';
 import { PrimaryButton } from './PrimaryButton';
@@ -27,17 +28,25 @@ import { assigneesForVisitLaunch } from '../lib/jobMissionScopes';
 import type { JobCard } from '../types/jobCard';
 import { resolveLocationPin } from '../lib/locationPin';
 import {
+  dateFromHhmm,
+  hhmmFromDate,
+  validateOnSiteTimeRange,
+} from '../lib/visitDuration';
+import {
   formatVisitLocationLabel,
   formatVisitWhen,
   resolveVisitLocation,
+  visitStatus,
   visitUsesJobLocation,
   type StoredJobVisit,
 } from '../lib/jobVisits';
 
 type LocationMode = 'keep' | 'job_site' | 'actual';
+export type VisitOnSiteSheetMode = 'launch' | 'complete';
 
 type Props = {
   visible: boolean;
+  mode?: VisitOnSiteSheetMode;
   job: Pick<
     JobCard,
     | 'missionScopes'
@@ -61,11 +70,14 @@ type Props = {
     visitId: string,
     location: LaunchVisitLocationChoice,
     team: StoredJobAssignee[],
+    arrivalTime: string,
   ) => void;
+  onComplete?: (visitId: string, arrivalTime: string, departureTime: string) => void;
 };
 
 export function LaunchVisitSheet({
   visible,
+  mode = 'launch',
   job,
   visits,
   jobSiteAddress,
@@ -76,8 +88,10 @@ export function LaunchVisitSheet({
   busy = false,
   onClose,
   onLaunch,
+  onComplete,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const isLaunch = mode === 'launch';
   const [visitId, setVisitId] = useState('');
   const [teamDraft, setTeamDraft] = useState<AssigneeEntry[]>([]);
   const [locationMode, setLocationMode] = useState<LocationMode>('keep');
@@ -86,6 +100,9 @@ export function LaunchVisitSheet({
   const [actualLng, setActualLng] = useState<number | undefined>();
   const [mapOpen, setMapOpen] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
+  const [arrivalAt, setArrivalAt] = useState<Date | null>(new Date());
+  const [departureAt, setDepartureAt] = useState<Date | null>(new Date());
+  const [activePickerKey, setActivePickerKey] = useState<string | null>(null);
 
   const selected = useMemo(
     () => visits.find((visit) => visit.id === visitId),
@@ -108,8 +125,23 @@ export function LaunchVisitSheet({
     setActualText('');
     setActualLat(undefined);
     setActualLng(undefined);
+    const now = new Date();
+    setArrivalAt(now);
+    setDepartureAt(now);
+    setActivePickerKey(null);
     onLoadPersonnel?.();
   }, [visible, initialVisitId, visits, job, onLoadPersonnel]);
+
+  useEffect(() => {
+    if (!visible || !selected) return;
+    const now = new Date();
+    const arrival =
+      selected.arrivalTime && visitStatus(selected) === 'in_progress'
+        ? dateFromHhmm(now, selected.arrivalTime) ?? now
+        : now;
+    setArrivalAt(arrival);
+    setDepartureAt(now);
+  }, [visible, selected?.id, selected?.arrivalTime, selected?.status]);
 
   useEffect(() => {
     if (!visible || !visitId) return;
@@ -151,11 +183,31 @@ export function LaunchVisitSheet({
         Alert.alert('Launch', 'Confirm at least one person on site for this visit.');
         return;
       }
-      onLaunch(visitId, buildLocationChoice(), team);
+      if (!arrivalAt) {
+        Alert.alert('Launch', 'Enter the on-site arrival time.');
+        return;
+      }
+      onLaunch(visitId, buildLocationChoice(), team, hhmmFromDate(arrivalAt));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Check on-site location.';
       Alert.alert('Launch', message);
     }
+  };
+
+  const handleComplete = () => {
+    if (!visitId || !onComplete) return;
+    if (!arrivalAt || !departureAt) {
+      Alert.alert('Complete visit', 'Enter arrival and departure times.');
+      return;
+    }
+    const arrivalTime = hhmmFromDate(arrivalAt);
+    const departureTime = hhmmFromDate(departureAt);
+    const rangeError = validateOnSiteTimeRange(arrivalTime, departureTime);
+    if (rangeError) {
+      Alert.alert('Complete visit', rangeError);
+      return;
+    }
+    onComplete(visitId, arrivalTime, departureTime);
   };
 
   return (
@@ -164,9 +216,13 @@ export function LaunchVisitSheet({
         <View style={styles.container}>
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <View style={styles.handle} />
-          <Text style={styles.title}>Launch on site</Text>
+          <Text style={styles.title}>
+            {isLaunch ? 'Mark visit launched' : 'Complete visit'}
+          </Text>
           <Text style={styles.subtitle}>
-            Choose the visit, confirm who is on site, and where you are working.
+            {isLaunch
+              ? 'Pick the visit, enter on-site times, team, and location.'
+              : 'Enter actual on-site times for this visit, then sign or lock.'}
           </Text>
 
           <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled">
@@ -202,6 +258,38 @@ export function LaunchVisitSheet({
 
             {selected ? (
               <>
+                <Text style={[styles.sectionLabel, styles.sectionGap]}>On-site times</Text>
+                <View style={styles.timeRow}>
+                  <View style={styles.timeHalf}>
+                    <DateTimeField
+                      label="Arrival"
+                      value={arrivalAt}
+                      onChange={setArrivalAt}
+                      mode="time"
+                      icon="log-in-outline"
+                      pickerKey={`${visitId}-arrival`}
+                      activePickerKey={activePickerKey}
+                      onActivePickerChange={setActivePickerKey}
+                    />
+                  </View>
+                  {!isLaunch ? (
+                    <View style={styles.timeHalf}>
+                      <DateTimeField
+                        label="Departure"
+                        value={departureAt}
+                        onChange={setDepartureAt}
+                        mode="time"
+                        icon="log-out-outline"
+                        pickerKey={`${visitId}-departure`}
+                        activePickerKey={activePickerKey}
+                        onActivePickerChange={setActivePickerKey}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+
+                {isLaunch ? (
+                  <>
                 <Text style={[styles.sectionLabel, styles.sectionGap]}>On-site team</Text>
                 <Text style={styles.teamHint}>
                   Confirm who is on this visit. Adjust roles or add someone if needed.
@@ -280,6 +368,8 @@ export function LaunchVisitSheet({
                     ) : null}
                   </View>
                 ) : null}
+                  </>
+                ) : null}
               </>
             ) : null}
           </ScrollView>
@@ -290,10 +380,18 @@ export function LaunchVisitSheet({
             </Pressable>
             <View style={{ flex: 1 }}>
               <PrimaryButton
-                label={busy ? 'Launching…' : 'Launch visit'}
-                icon="play-circle-outline"
-                onPress={handleLaunch}
-                disabled={busy || !visitId}
+                label={
+                  busy
+                    ? isLaunch
+                      ? 'Saving…'
+                      : 'Completing…'
+                    : isLaunch
+                      ? 'Mark launched'
+                      : 'Complete visit'
+                }
+                icon={isLaunch ? 'play-circle-outline' : 'checkmark-circle-outline'}
+                onPress={isLaunch ? handleLaunch : handleComplete}
+                disabled={busy || !visitId || (!isLaunch && !onComplete)}
               />
             </View>
           </View>
@@ -375,6 +473,8 @@ const styles = StyleSheet.create({
   title: { ...typography.subheading, color: colors.black, fontSize: 18 },
   subtitle: { ...typography.caption, color: colors.grey600, marginTop: 4, marginBottom: spacing.md },
   scroll: { maxHeight: 520 },
+  timeRow: { flexDirection: 'row', gap: spacing.sm },
+  timeHalf: { flex: 1, minWidth: 0 },
   teamHint: {
     ...typography.caption,
     color: colors.grey600,

@@ -6,19 +6,19 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
-  Linking,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { AttachmentImageModal, type AttachmentImagePreview } from './AttachmentImageModal';
+import { AttachmentPreviewImage } from './AttachmentPreviewImage';
+import { PdfPreviewModal } from './PdfPreviewModal';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import {
   deleteAttachment,
   getAttachmentName,
-  getFilePreviewUrl,
-  getFileViewUrl,
+  openAttachment,
   uploadAttachment,
 } from '../lib/appwrite/storage';
 
@@ -37,6 +37,8 @@ export function WorkReportEntryAttachments({
 }: WorkReportEntryAttachmentsProps) {
   const [busy, setBusy] = useState(false);
   const [documentNames, setDocumentNames] = useState<Record<string, string>>({});
+  const [imagePreview, setImagePreview] = useState<AttachmentImagePreview | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<{ fileId: string; name: string } | null>(null);
   const readOnly = disabled || !onChange;
 
   useEffect(() => {
@@ -141,6 +143,11 @@ export function WorkReportEntryAttachments({
     }
   };
 
+  const deletePhotoById = async (id: string) => {
+    await patch({ photoIds: photoIds.filter((x) => x !== id), documentIds });
+    await deleteAttachment(id);
+  };
+
   const removePhoto = (id: string) => {
     if (readOnly) return;
     Alert.alert('Remove photo', 'Delete this photo?', [
@@ -148,10 +155,7 @@ export function WorkReportEntryAttachments({
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: async () => {
-          await patch({ photoIds: photoIds.filter((x) => x !== id), documentIds });
-          await deleteAttachment(id);
-        },
+        onPress: () => void deletePhotoById(id),
       },
     ]);
   };
@@ -178,7 +182,19 @@ export function WorkReportEntryAttachments({
 
   if (readOnly && !photoIds.length && !documentIds.length) return null;
 
+  const handleOpenAttachment = async (id: string) => {
+    try {
+      await openAttachment(id, {
+        onImagePreview: setImagePreview,
+        onPdfPreview: setPdfPreview,
+      });
+    } catch {
+      Alert.alert('Error', 'Could not open file.');
+    }
+  };
+
   return (
+    <>
     <View style={styles.wrap}>
       <View style={styles.head}>
         <Text style={styles.label}>Photos & docs</Text>
@@ -190,11 +206,11 @@ export function WorkReportEntryAttachments({
           {photoIds.map((id) => (
             <Pressable
               key={id}
-              onPress={() => Linking.openURL(getFileViewUrl(id))}
+              onPress={() => void handleOpenAttachment(id)}
               onLongPress={() => removePhoto(id)}
               style={({ pressed }) => [styles.photo, pressed && styles.pressed]}
             >
-              <Image source={{ uri: getFilePreviewUrl(id, 200) }} style={styles.photoImg} />
+              <AttachmentPreviewImage fileId={id} width={200} style={styles.photoImg} />
             </Pressable>
           ))}
           {!readOnly ? (
@@ -213,7 +229,7 @@ export function WorkReportEntryAttachments({
           {documentIds.map((id) => (
             <Pressable
               key={id}
-              onPress={() => Linking.openURL(getFileViewUrl(id))}
+              onPress={() => void handleOpenAttachment(id)}
               onLongPress={() => removeDoc(id)}
               style={({ pressed }) => [styles.docChip, pressed && styles.pressed]}
             >
@@ -235,6 +251,20 @@ export function WorkReportEntryAttachments({
         </View>
       )}
     </View>
+    <AttachmentImageModal
+      visible={imagePreview !== null}
+      preview={imagePreview}
+      onClose={() => setImagePreview(null)}
+      canDelete={!readOnly}
+      onDelete={imagePreview ? () => deletePhotoById(imagePreview.fileId) : undefined}
+    />
+    <PdfPreviewModal
+      visible={pdfPreview !== null}
+      title={pdfPreview?.name ?? 'Document'}
+      source={pdfPreview ? { kind: 'fileId', fileId: pdfPreview.fileId } : null}
+      onClose={() => setPdfPreview(null)}
+    />
+    </>
   );
 }
 

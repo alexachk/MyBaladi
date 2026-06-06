@@ -6,6 +6,12 @@ import { WorkReportEntryAttachments } from './WorkReportEntryAttachments';
 import { colors, radius, spacing, typography } from '../constants/theme';
 import { newContactKey } from '../lib/clientContact';
 import {
+  canAddVisitLinkedRow,
+  defaultUnlockedVisitId,
+  visitIdLocked,
+  visitLinkOptionsForEdit,
+} from '../lib/jobVisitLink';
+import {
   defaultWorkReportFormState,
   type WorkReportFormState,
   type WorkReportTextEntry,
@@ -17,10 +23,6 @@ interface JobWorkReportsFieldProps {
   onChange: (value: WorkReportFormState) => void;
   visitOptions?: WorkReportVisitOption[];
   lockedVisitIds?: string[];
-}
-
-function isVisitRowLocked(visitId: string | null, lockedVisitIds: string[]): boolean {
-  return Boolean(visitId && lockedVisitIds.includes(visitId));
 }
 
 function TextEntryList({
@@ -43,7 +45,11 @@ function TextEntryList({
   lockedVisitIds?: string[];
 }) {
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
-  const defaultVisitId = visitOptions.find((option) => option.id)?.id ?? null;
+  const canAdd = useMemo(
+    () => canAddVisitLinkedRow(visitOptions, lockedVisitIds),
+    [visitOptions, lockedVisitIds],
+  );
+  const defaultVisitId = defaultUnlockedVisitId(visitOptions, lockedVisitIds);
 
   const updateRow = (index: number, patch: Partial<WorkReportTextEntry>) => {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -86,15 +92,17 @@ function TextEntryList({
     <View style={styles.block}>
       <View style={styles.labelRow}>
         <Text style={styles.label}>{label}</Text>
-        <Pressable onPress={addRow} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
-          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
-          <Text style={styles.addText}>{addLabel}</Text>
-        </Pressable>
+        {canAdd ? (
+          <Pressable onPress={addRow} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
+            <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+            <Text style={styles.addText}>{addLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.rows}>
         {rows.map((row, index) => {
-          const rowLocked = isVisitRowLocked(row.visitId, lockedVisitIds);
+          const rowLocked = visitIdLocked(row.visitId, lockedVisitIds);
           return (
           <View key={row.key} style={[styles.card, rowLocked && styles.cardLocked]}>
             {rowLocked ? (
@@ -120,8 +128,9 @@ function TextEntryList({
             <View pointerEvents={rowLocked ? 'none' : 'auto'} style={rowLocked ? styles.disabledBlock : undefined}>
             {visitOptions.length > 1 ? (
               <Pressable
-                onPress={() => setPickerIndex(index)}
-                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed]}
+                onPress={() => !rowLocked && setPickerIndex(index)}
+                disabled={rowLocked}
+                style={({ pressed }) => [styles.visitPicker, pressed && styles.pressed, rowLocked && styles.disabled]}
               >
                 <Ionicons name="calendar-outline" size={14} color={colors.info} />
                 <Text style={styles.visitPickerText} numberOfLines={2}>
@@ -159,7 +168,11 @@ function TextEntryList({
         visible={pickerIndex !== null}
         title="Link to visit"
         compact
-        options={visitOptions.map((option) => ({
+        options={visitLinkOptionsForEdit(
+          visitOptions,
+          lockedVisitIds,
+          pickerIndex !== null ? rows[pickerIndex]?.visitId : null,
+        ).map((option) => ({
           id: option.id ?? '__general__',
           label: option.label,
         }))}
@@ -288,4 +301,5 @@ const styles = StyleSheet.create({
   },
   multiline: { minHeight: 88 },
   pressed: { opacity: 0.85 },
+  disabled: { opacity: 0.55 },
 });

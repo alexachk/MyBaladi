@@ -13,7 +13,10 @@ import {
   schedulePayloadFromVisits,
   type ScheduleLogEntry,
 } from './jobSchedule';
-import { computeActualVisitDurationMinutes } from './visitDuration';
+import {
+  computeActualVisitDurationMinutes,
+  validateOnSiteTimeRange,
+} from './visitDuration';
 import {
   normalizeVisitsList,
   patchVisitInList,
@@ -83,6 +86,7 @@ export function buildLaunchVisitUpdates(
   actor: { id: string; name: string },
   confirmedTeam: StoredJobAssignee[],
   locationChoice?: LaunchVisitLocationChoice,
+  manualArrivalTime?: string,
 ): Pick<
   JobCard,
   | 'status'
@@ -120,8 +124,11 @@ export function buildLaunchVisitUpdates(
     throw new Error('Stop or finish the current visit before launching another.');
   }
 
-  const arrivalTime = timeNow();
-  const updatedVisits = patchVisitInList(visits, visitId, {
+  const arrivalTime = manualArrivalTime?.trim() || timeNow();
+  if (computeActualVisitDurationMinutes(arrivalTime, arrivalTime) == null) {
+    throw new Error('Enter a valid arrival time (HH:mm).');
+  }
+  let updatedVisits = patchVisitInList(visits, visitId, {
     status: 'in_progress',
     arrivalTime,
     departureTime: undefined,
@@ -129,7 +136,18 @@ export function buildLaunchVisitUpdates(
     ...locationFieldsForLaunch(locationChoice),
   });
 
-  const schedule = resolveStoredSchedule({ ...job, visits: updatedVisits });
+  const schedule = appendScheduleLog(resolveStoredSchedule({ ...job, visits: updatedVisits }), {
+    userId: actor.id,
+    userName: actor.name,
+    fromDate: target.date,
+    fromTime: target.time,
+    toDate: target.date,
+    toTime: target.time,
+    action: 'launched',
+    visitId: target.id,
+    arrivalTime,
+    plannedDurationMinutes: target.durationMinutes,
+  });
   const payload = schedulePayloadFromVisits({ ...job, scheduleLog: schedule.log }, updatedVisits);
   const active = updatedVisits.find((visit) => visit.id === visitId)!;
   const missionScopes = patchVisitTeamOnMissionScopes(job, visitId, team);
@@ -286,6 +304,90 @@ export function buildStopVisitUpdates(
     finishedAt: stillOpen || remainingScheduledCount(updatedVisits) > 0 ? null : job.finishedAt,
     ...payload,
     ...onSite,
+  };
+}
+
+/** Mark visit done with manually entered on-site times (from scheduled or in progress). */
+export function buildManualCompleteVisitUpdates(
+  job: Pick<
+    JobCard,
+    | 'scheduledDate'
+    | 'scheduledTime'
+    | 'initialScheduledDate'
+    | 'initialScheduledTime'
+    | 'scheduleLog'
+    | 'visits'
+    | 'startedAt'
+    | 'finishedAt'
+  >,
+  visitId: string,
+  actor: { id: string; name: string },
+  times: { arrivalTime: string; departureTime: string },
+): Pick<
+  JobCard,
+  | 'status'
+  | 'finishedAt'
+  | 'scheduledDate'
+  | 'scheduledTime'
+  | 'initialScheduledDate'
+  | 'initialScheduledTime'
+  | 'scheduleLog'
+  | 'visits'
+  | 'arrivalTime'
+  | 'departureTime'
+> {
+  const visits = resolveVisits(job);
+  const target = visits.find((visit) => visit.id === visitId);
+  if (!target) throw new Error('Visit not found.');
+  const status = visitStatus(target);
+  if (status === 'done' || status === 'rescheduled' || status === 'cancelled') {
+    throw new Error('Visit already closed.');
+  }
+  if (status === 'scheduled' && visitInProgress(visits)) {
+    throw new Error('Finish or stop the visit in progress first.');
+  }
+
+  const arrivalTime = times.arrivalTime.trim();
+  const departureTime = times.departureTime.trim();
+  const rangeError = validateOnSiteTimeRange(arrivalTime, departureTime);
+  if (rangeError) throw new Error(rangeError);
+
+  let updatedVisits = patchVisitInList(visits, target.id, {
+    status: 'done',
+    arrivalTime,
+    departureTime,
+    completedAt: new Date().toISOString(),
+  });
+
+  const schedule = resolveStoredSchedule({ ...job, visits: updatedVisits });
+  const logEntry: Omit<ScheduleLogEntry, 'at'> = {
+    userId: actor.id,
+    userName: actor.name,
+    fromDate: target.date,
+    fromTime: target.time,
+    toDate: target.date,
+    toTime: target.time,
+    action: 'done',
+    visitId: target.id,
+    arrivalTime,
+    departureTime,
+    actualDurationMinutes:
+      computeActualVisitDurationMinutes(arrivalTime, departureTime) ?? undefined,
+    plannedDurationMinutes: target.durationMinutes,
+  };
+  const withLog = appendScheduleLog(schedule, logEntry);
+  updatedVisits = withLog.visits;
+  const payload = schedulePayloadFromVisits({ ...job, scheduleLog: withLog.log }, updatedVisits);
+
+  const moreScheduled = remainingScheduledCount(updatedVisits);
+  const active = updatedVisits.find((visit) => visit.id === target.id)!;
+
+  return {
+    status: moreScheduled > 0 ? 'planned' : 'pending_review',
+    finishedAt: moreScheduled > 0 ? null : job.finishedAt ?? new Date().toISOString(),
+    ...payload,
+    arrivalTime: active.arrivalTime ?? '',
+    departureTime: active.departureTime ?? '',
   };
 }
 

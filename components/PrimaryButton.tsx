@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { colors, radius, spacing, typography } from '../constants/theme';
 
 interface PrimaryButtonProps {
@@ -8,6 +8,9 @@ interface PrimaryButtonProps {
   icon?: keyof typeof Ionicons.glyphMap;
   variant?: 'primary' | 'secondary' | 'ghost';
   disabled?: boolean;
+  /** Equal-width button in a horizontal row */
+  fill?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function PrimaryButton({
@@ -16,6 +19,8 @@ export function PrimaryButton({
   icon,
   variant = 'primary',
   disabled,
+  fill,
+  style,
 }: PrimaryButtonProps) {
   const isPrimary = variant === 'primary';
   const isGhost = variant === 'ghost';
@@ -26,23 +31,31 @@ export function PrimaryButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        fill && styles.fill,
         isPrimary && styles.primary,
         variant === 'secondary' && styles.secondary,
         isGhost && styles.ghost,
         pressed && styles.pressed,
         disabled && styles.disabled,
+        style,
       ]}
     >
       {icon ? (
-        <Ionicons
-          name={icon}
-          size={18}
-          color={isPrimary ? colors.black : isGhost ? colors.info : colors.black}
-        />
+        <View style={fill ? styles.fillIcon : undefined}>
+          <Ionicons
+            name={icon}
+            size={18}
+            color={isPrimary ? colors.black : isGhost ? colors.info : colors.black}
+          />
+        </View>
       ) : null}
       <Text
+        numberOfLines={fill ? 1 : undefined}
+        adjustsFontSizeToFit={fill}
+        minimumFontScale={fill ? 0.85 : undefined}
         style={[
           styles.label,
+          fill && styles.fillLabel,
           isPrimary && styles.primaryLabel,
           variant === 'secondary' && styles.secondaryLabel,
           isGhost && styles.ghostLabel,
@@ -86,6 +99,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderRadius: radius.md,
   },
+  fill: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: spacing.sm,
+  },
+  fillIcon: { flexShrink: 0 },
+  fillLabel: { ...typography.caption, fontWeight: '700', flexShrink: 1 },
   primary: {
     backgroundColor: colors.primary,
   },

@@ -8,7 +8,12 @@ import {
   defaultMissionScopeEntry,
   type MissionScopeEntry,
 } from '../lib/jobMissionScopes';
-import type { VisitLinkOption } from '../lib/jobVisitLink';
+import {
+  canAddMissionScopeRow,
+  visitIdLocked,
+  visitLinkOptionsForEdit,
+  type VisitLinkOption,
+} from '../lib/jobVisitLink';
 import { JobAssigneesField } from './JobAssigneesField';
 import { MissionTypesField } from './MissionTypesField';
 import { PickerSheet } from './PickerSheet';
@@ -26,10 +31,6 @@ interface JobMissionScopesFieldProps {
   assigneesAnchorRef?: (node: View | null) => void;
   /** Done visits locked during follow-up (Level 1). */
   lockedVisitIds?: string[];
-}
-
-function isVisitRowLocked(visitId: string | null, lockedVisitIds: string[]): boolean {
-  return Boolean(visitId && lockedVisitIds.includes(visitId));
 }
 
 export function JobMissionScopesField({
@@ -53,17 +54,22 @@ export function JobMissionScopesField({
     [rows],
   );
 
+  const canAdd = useMemo(
+    () => canAddMissionScopeRow(rows, visitOptions, lockedVisitIds),
+    [rows, visitOptions, lockedVisitIds],
+  );
+
   const visitPickerOptions = useMemo(() => {
     if (visitPickerIndex == null) return [];
     const current = rows[visitPickerIndex]?.visitId ?? null;
-    return visitOptions
+    return visitLinkOptionsForEdit(visitOptions, lockedVisitIds, current)
       .filter((opt) => {
         if (opt.id === current) return true;
         if (opt.id == null) return !rows.some((row, i) => i !== visitPickerIndex && !row.visitId);
         return !rows.some((row, i) => i !== visitPickerIndex && row.visitId === opt.id);
       })
       .map((opt) => ({ id: opt.id ?? '__general__', label: opt.label }));
-  }, [visitOptions, rows, visitPickerIndex]);
+  }, [visitOptions, rows, visitPickerIndex, lockedVisitIds]);
 
   const updateRow = (index: number, patch: Partial<MissionScopeEntry>) => {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -83,7 +89,9 @@ export function JobMissionScopesField({
 
   const addScope = () => {
     const generalTaken = rows.some((row) => !row.visitId);
-    const nextVisit = visitOptions.find((opt) => opt.id && !usedVisitIds.has(opt.id));
+    const nextVisit = visitOptions.find(
+      (opt) => opt.id && !usedVisitIds.has(opt.id) && !visitIdLocked(opt.id, lockedVisitIds),
+    );
     onChange([
       ...rows,
       defaultMissionScopeEntry(generalTaken && nextVisit ? nextVisit.id : null),
@@ -99,16 +107,18 @@ export function JobMissionScopesField({
     <View ref={anchorRef} collapsable={false} style={styles.wrap}>
       <View style={styles.labelRow}>
         <Text style={styles.label}>Mission scope</Text>
-        <Pressable onPress={addScope} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
-          <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
-          <Text style={styles.addText}>Add scope</Text>
-        </Pressable>
+        {canAdd ? (
+          <Pressable onPress={addScope} hitSlop={8} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
+            <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+            <Text style={styles.addText}>Add scope</Text>
+          </Pressable>
+        ) : null}
       </View>
       <Text style={styles.hint}>Per visit or general — types, equipment (qty), team.</Text>
 
       <View style={styles.rows}>
         {rows.map((row, scopeIndex) => {
-          const rowLocked = isVisitRowLocked(row.visitId, lockedVisitIds);
+          const rowLocked = visitIdLocked(row.visitId, lockedVisitIds);
           return (
           <View key={row.key} style={[styles.scopeCard, rowLocked && styles.scopeCardLocked]}>
             {rowLocked ? (

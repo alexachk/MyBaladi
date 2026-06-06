@@ -12,7 +12,8 @@
 import { Databases, Permission, Query, Role, Users } from 'node-appwrite';
 import { createAdminClient } from './client.mjs';
 import { APPWRITE } from './config.mjs';
-import { buildMockJobs } from './mockJobsData.mjs';
+import { buildMockJobs, LEGACY_JOB_IDS } from './mockJobsData.mjs';
+import { purgeLegacyMocks } from './purgeMocks.mjs';
 import { serializeAssigneesForWrite, serializeWorkReport } from './seedJobSerialization.mjs';
 
 const COLLECTION = 'job_cards';
@@ -76,22 +77,29 @@ function jobDocument(job, ownerId, ownerName) {
     reviewBypassed: false,
     photoIds: [],
     documentIds: [],
+    startedAt: null,
+    finishedAt: null,
+    reminderAt: null,
+    technicianSignatureId: null,
+    clientSignatureId: null,
+    clientSignatureName: null,
+    signatureVisitId: null,
+    technicianSignedAt: null,
+    lockedAt: null,
+    lockedBy: null,
+    notificationId: null,
+    calendarEventId: null,
+    submittedById: null,
+    submittedAt: null,
+    reviewedById: null,
+    reviewedByName: null,
+    reviewedAt: null,
+    reviewNote: null,
   };
 
   if (job.clientType) data.clientType = job.clientType;
   if (job.companyId) data.companyId = job.companyId;
   if (job.personId) data.personId = job.personId;
-  if (job.startedAt) data.startedAt = job.startedAt;
-  if (job.finishedAt) data.finishedAt = job.finishedAt;
-  if (job.submittedById) data.submittedById = job.submittedById;
-  if (job.submittedAt) data.submittedAt = job.submittedAt;
-  if (job.reviewedById) data.reviewedById = job.reviewedById;
-  if (job.reviewedByName) data.reviewedByName = job.reviewedByName;
-  if (job.reviewedAt) data.reviewedAt = job.reviewedAt;
-  if (job.reviewNote) data.reviewNote = job.reviewNote;
-  if (job.clientSignatureName) data.clientSignatureName = job.clientSignatureName;
-  if (job.lockedAt) data.lockedAt = job.lockedAt;
-  if (job.lockedBy) data.lockedBy = job.lockedBy;
 
   return data;
 }
@@ -145,16 +153,22 @@ async function main() {
     supervisorName: supName,
   });
 
-  console.log(`Seeding ${jobs.length} demo job cards → ${APPWRITE.databaseId}`);
+  console.log(`Seeding ${jobs.length} demo job card → ${APPWRITE.databaseId}`);
   console.log(`Technician: ${techEmail} (${tech.$id})`);
   console.log(`Supervisor: ${supEmail} (${sup.$id})\n`);
+
+  const purged = await purgeLegacyMocks(databases, APPWRITE.databaseId, {
+    jobs: LEGACY_JOB_IDS,
+  });
+  if (purged) console.log(`Purged ${purged} legacy demo job(s).\n`);
 
   for (const job of jobs) {
     await upsertJob(databases, job, tech.$id, ownerName);
   }
 
-  console.log(`\nDone — ${jobs.length} jobs. Pull to refresh in the app.`);
-  console.log('References: JC-20990101-001 … 007 (demo series).');
+  const visitDate = jobs[0]?.scheduledDate ?? '';
+  console.log(`\nDone — 1 job (${jobs[0]?.reference}). Visit on ${visitDate} at 09:00.`);
+  console.log('Pull to refresh in the app.');
 }
 
 main().catch((err) => {

@@ -50,11 +50,42 @@ async function waitForAttributes(databases, collectionId) {
   throw new Error(`Timed out waiting for attributes on ${collectionId}`);
 }
 
+function permissionsMatch(remote = [], expectedStrings = []) {
+  const remoteSet = new Set([...remote].sort());
+  const expectedSet = new Set(buildPermissions(expectedStrings).sort());
+  if (remoteSet.size !== expectedSet.size) return false;
+  for (const perm of expectedSet) {
+    if (!remoteSet.has(perm)) return false;
+  }
+  return true;
+}
+
+async function ensureCollectionSettings(databases, def, collection) {
+  const expectedPerms = buildPermissions(def.collectionPermissions);
+  const expectedDocSec = Boolean(def.documentSecurity);
+  const permsOk = permissionsMatch(collection.$permissions, def.collectionPermissions);
+  const docSecOk = collection.documentSecurity === expectedDocSec;
+  if (permsOk && docSecOk) {
+    console.log('  collection settings: ok');
+    return collection;
+  }
+  const updated = await databases.updateCollection(
+    APPWRITE.databaseId,
+    def.id,
+    def.name,
+    expectedPerms,
+    expectedDocSec,
+    true,
+  );
+  console.log('  updated collection permissions / documentSecurity');
+  return updated;
+}
+
 async function ensureCollection(databases, def) {
   try {
     const existing = await databases.getCollection(APPWRITE.databaseId, def.id);
     console.log(`Collection "${def.id}" exists.`);
-    return existing;
+    return ensureCollectionSettings(databases, def, existing);
   } catch {
     await databases.createCollection(
       APPWRITE.databaseId,

@@ -61,14 +61,20 @@ export function PriorityDot({ priority }: { priority: JobPriority }) {
   );
 }
 
+const MANUAL_STATUS_EXCLUDE: JobStatus[] = ['completed', 'pending_review'];
+
 export function StatusPicker({
   value,
   onChange,
+  exclude = MANUAL_STATUS_EXCLUDE,
 }: {
   value: JobStatus;
   onChange: (status: JobStatus) => void;
+  /** Hidden from manual pick (workflow / supervisor close only). */
+  exclude?: JobStatus[];
 }) {
-  const options = Object.keys(STATUS_CONFIG) as JobStatus[];
+  const hidden = new Set(exclude);
+  const options = (Object.keys(STATUS_CONFIG) as JobStatus[]).filter((status) => !hidden.has(status));
   return (
     <View style={styles.pickerRow}>
       {options.map((status) => {

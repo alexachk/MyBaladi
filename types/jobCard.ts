@@ -5,6 +5,7 @@ import type { StoredVisitNote } from '../lib/jobVisitNotes';
 import type { StoredJobContact } from '../lib/jobContacts';
 import type { ScheduleLogEntry } from '../lib/jobSchedule';
 import type { StoredJobVisit } from '../lib/jobVisits';
+import type { AttachmentVisitLinks } from '../lib/jobCardAttachments';
 import type { StoredWorkReport } from '../lib/jobWorkReports';
 
 export type JobStatus = 'draft' | 'planned' | 'in_progress' | 'completed' | 'pending_review';
@@ -80,6 +81,8 @@ export interface JobCard {
 
   photoIds?: string[];
   documentIds?: string[];
+  /** fileId → visitId (null / missing = general) */
+  attachmentVisitLinks?: AttachmentVisitLinks;
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -114,6 +117,7 @@ export const MISSION_TYPES = [
   'Other',
 ] as const;
 
-export function isJobLocked(job: Pick<JobCard, 'lockedAt'>): boolean {
-  return Boolean(job.lockedAt);
+export function isJobLocked(job: Pick<JobCard, 'lockedAt' | 'visits'>): boolean {
+  if (job.lockedAt) return true;
+  return (job.visits ?? []).some((visit) => Boolean(visit.lockedAt));
 }
